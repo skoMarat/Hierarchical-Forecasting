@@ -58,7 +58,7 @@ class Tree:
         """       
         
         # #reads data
-        self.data=pd.read_csv(data_directory)
+        self.data=pd.read_pickle(data_directory)
         self.type=type
         self.mY , self.date_time_index , self.levels, self.list_of_leafs = self.get_mY()
         

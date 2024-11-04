@@ -33,9 +33,10 @@ logging.getLogger('cmdstanpy').addHandler(logging.NullHandler())
        
 
 def prepare_weights():
-    dfValidation=pd.read_csv("c:\\Users\\31683\\Desktop\\sales_train_validation.csv") 
-    dfCalendar=pd.read_csv(os.getcwd()+f"\\data\\M5\\calendar.csv")
-    dfPrices=pd.read_csv(os.getcwd()+f"\\data\\M5\\sell_prices.csv")
+    #reads data that was downloaded from Kaggle into desktop as a csv file
+    dfValidation=pd.read_pkl("c:\\Users\\31683\\Desktop\\sales_train_validation.csv") 
+    dfCalendar=pd.read_pkl(os.getcwd()+f"\\data\\M5\\calendar.csv")
+    dfPrices=pd.read_pkl(os.getcwd()+f"\\data\\M5\\sell_prices.csv")
     
     df=pd.concat([dfValidation[['store_id','item_id']],dfValidation.iloc[:,-28:]], axis=1)
     dfDW=dfCalendar[dfCalendar.d.isin(df.columns[1:])][['d','wm_yr_wk']]
@@ -115,7 +116,7 @@ def prepare_prices():
 def get_mX(path):
     """Puts price data into a mX according to hierarchical structure, propogates up the structure using mean    
     """
-    data=pd.read_csv(path) 
+    data=pd.read_pickle(path, compression='gzip') 
     #based on data, find all possible levels and datetime index
     #TODO change below to accomodate levels and prices
     levels=data.columns[pd.to_datetime(data.columns, errors='coerce').isna()] 
@@ -185,10 +186,10 @@ def main():
     After reconciliation, each tree gets populated with reconclied forecasts, completing the whole algorithm
     A tree is equipped with plot_errors() method that creates an interactive plot of percentage errors per leaf (reconciled forecasts and base forecasts) 
     """
-    
-    Y_path=os.getcwd()+f"\\data\\M5\\sales_train_validation.csv"  # to data file 
+    path='c:\\Users\\31683\\Desktop\\data\\M5'
+    Y_path=path+f"\\sales_train_validation.pkl"  # to data file  
     prepare_prices()
-    X_path=os.getcwd()+f"\\data\\M5\\prices_train_val_eval.csv"  # to data file
+    X_path=os.getcwd()+f"\\prices_train_val_eval.pkl"  # to data file
     prepare_weights()
     
     ####################################
@@ -206,13 +207,13 @@ def main():
     
     #additional (optional) data for Prophet forecasting
     mX  = get_mX(X_path)
-    holidays=pd.read_csv(os.getcwd()+f"\\data\\M5\\holidays.csv")
+    holidays=pd.read_csv(path+f"\\holidays.csv")
     holidays=holidays.values.flatten()
     # changepoints=pd.read_csv(os.getcwd()+f"\\data\\M5\\changepoints.csv")
     # changepoints=changepoints.values.flatten()
     
     #weights for M5 competition testing
-    vW=np.loadtxt(os.getcwd()+f"\\data\\M5\\weights.txt")
+    vW=np.loadtxt(path+f"\\weights.txt")
     vW=vW[:114]
     
     #start of the algorithm for a given weight
