@@ -284,35 +284,36 @@ class Tree:
         mS=self.mS
         mW=self.mW
         
+        
+        n=mS.shape[1]
+        m=mS.shape[0]
+        self.tP=np.zeros((7,n,m))
+        
         if sWeigthType == 'bottom_up':
-            n=mS.shape[1]
-            m=mS.shape[0]
             m0=np.full((n,m-n),0, dtype=int)
             mI=np.eye(n)
             mP=np.hstack((m0,mI))
             self.mP=mP
         elif 'top_down' in sWeigthType:
-            n=mS.shape[1]
-            m=mS.shape[0]
-            m0=np.full((n,m-1),0, dtype=int)
-            iB= len([sublist for sublist in self.list_of_leafs if sublist.count(None) == 0])# integer length of bottom level
-            if sWeigthType=='top_down_hp': #historical proportions
-                #TODO 70 dynamic
-                vP = np.mean((self.mY[-iB:]/self.mY[0,:]),axis=1)
-            elif sWeigthType=='top_down_ph': #proportions of the historical averages
-                vP = np.mean(self.mY[-iB:],axis=1)/np.mean(self.mY[0,:],axis=0)
-            # elif sWeigthType=='top_down_fp': #forecast proportions
-            #     vP = 
-            vP=vP.reshape((iB,1))
-            mP=np.hstack((vP,m0))
-            self.mP=mP    
-        # else:
-        #     mWinv = np.linalg.inv(mW)
-        #     mP= (np.linalg.inv(mS.T @ (mWinv @ mS)) @ (mS.T @ (mWinv)))
-        #     self.mP=mP
+            for i in range(self.tP.shape[0]):    
+                m0=np.full((n,m-1),0, dtype=int)
+                iB= len([sublist for sublist in self.list_of_leafs if sublist.count(None) == 0])# integer length of bottom level
+                if i!=6:
+                    mY_i=self.mY[:,:-6+i][:,::-7][:,::-1]
+                else:
+                    mY_i=self.mY[:,::-7][:,::-1]
+                    
+                if sWeigthType=='top_down_hp': #historical proportions                    
+                    vP = np.mean((mY_i[-iB:,:]/mY_i[0,:]) , axis=1)  #TODO 7 dynamic
+                elif sWeigthType=='top_down_ph': #proportions of the historical averages
+                    vP = np.mean(mY_i[-iB:,:] , axis=1)  / np.mean(mY_i[0,:] , axis=0)  #TODO 7 dynamic
+
+                vP=vP.reshape((iB,1))
+                mP=np.hstack((vP,m0))
+                self.tP[i] = mP    
         else:
-             mP = (np.linalg.inv(mS.T @ (mW @ mS)) @ (mS.T @ (mW)))
-             self.mP=mP    
+            mP = (np.linalg.inv(mS.T @ (mW @ mS)) @ (mS.T @ (mW)))
+            self.mP=mP    
     
     def tune_Prophet(self, random_size=100,initial=1548,period=28,horizon=28,metric='rmse' , mX =None , 
                      dfHolidays=None, dfChangepoints=None):       
@@ -400,12 +401,17 @@ class Tree:
         Performs whole reconciliation algorithm 
         """                                  
         self.getMatrixW(sWeightType)      
-        self.getMatrixP(sWeightType)            
-        self.mYtilde=np.dot(np.dot(self.mS,self.mP),self.mYhat)
+        self.getMatrixP(sWeightType)
+        self.mYtilde=np.zeros((self.mY.shape[0],self.mYhat.shape[1]))      
+        if 'top_down' in sWeightType:    
+            for i in range(self.mYhat.shape[1]):
+                self.mYtilde[:,i]=self.mS@self.tP[i%7]@self.mYhat[:,i]
+        else:
+            self.mYtilde=self.mS@self.mP@self.mYhat
         
         print('Reconciliation is complete')
     
-    def cross_validation(self , dfHolidays, initial, period, horizon ):
+    def cross_validation(self , dfHolidays, initial, period, horizon , lMethods ):
         """Performs cross_validation and returns matrices required for assesment
 
         Args:
@@ -429,8 +435,6 @@ class Tree:
         print("Number of iterations is " + str(iIters))
  
         dOutputs={}
-        lMethods=["bottom_up", "top_down_ph" ,"top_down_hp",
-                  "ols","diag" ,'mint_full','mint_shrink','mint_diag']
         
         for method in lMethods:
             dOutputs[method]={}

@@ -171,12 +171,12 @@ def getCVResults( h:int, dOutputs ,metric:str , slices: list , iters: int , roll
     if relative==True:
         dfResults = matrix_to_df(np.round(mResults,2),
                         ['Total','State','Store','Cat.','Dept.','Average'], #TODO 
-                        ["BU"]+lMethods,
+                        ["bottom_up"]+lMethods,
                         ["Base","BU"])
     else:
         dfResults = matrix_to_df(np.round(mResults,2),
                         ['Total','State','Store','Cat.','Dept.','Average'], #TODO 
-                        ["BU"]+lMethods)
+                        ["bottom_up"]+lMethods)
         
     return dfResults
     
