@@ -217,58 +217,58 @@ class Tree:
         mW:            matrix of weights
         """
 
-        mRes=self.mRes.T
-        mW = np.eye(mRes.shape[1])
-        vNonNanRows = np.setdiff1d(np.arange(0,mRes.shape[0]),  np.unique(np.argwhere(np.isnan(mRes))[:,0]))
-        mRes = mRes[vNonNanRows,:]
+        tW=np.zeros((7,mRes.shape[0],mRes.shape[0]))
+        mRes=self.mRes.copy()
+
+        for i in range(tW.shape[0]):
+            if i!=6:
+                mRes_i=self.mRes[:,:-6+i][:,::-7][:,::-1]
+            else:
+                mRes_i=self.mRes[:,::-7][:,::-1]
         
-        if sWeightType == 'diag':  #WLS
-            for i in range(mRes.shape[1]):
-                mW[i,i] = np.mean(mRes[:,i]**2) # error Variance of each leaf
-        if sWeightType == 'mint_diag':
-            for i in range(mRes.shape[1]):
-                mW[i,i] = np.mean(mRes[:,i]**2) # error Variance of each leaf
-            mW=np.linalg.inv(mW)      
-        elif sWeightType == 'full':  # full
-            mSigma = mRes.T @ mRes / mRes.shape[0]
-            mW = np.linalg.inv(mSigma)
-        elif sWeightType == 'ols':
-            mW = np.eye(mRes.shape[1])         
-        elif sWeightType == 'mint_shrink':
-            n = mRes.shape[0]
-            m = mRes.shape[1]
-            mWF = mRes.T @ mRes / n
-            mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
-            #calculate numerator
-            dBottom = 0 # lower side in the expression for tuning parameter lambda
-            for i in range(m):
-                for j in range(m):
-                    if i>j:
-                        dBottom = dBottom + 2*( mWF[i,j] / np.sqrt(mWF[i,i]*mWF[j,j]) )
-            #Calculate denominator            
-            mResScaled = mRes / np.sqrt(np.diag(mWF)) # elementwise division
-            mResScaledSq = mResScaled**2
-            mUp = (1/(n*(n-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/n)*((mResScaled.T @ mResScaled)**2) )
-        
-            dUp = 0 # lower side in the expression for tuning parameter lambda
-            for i in range(m):
-                for j in range(m):
-                    if i>j:
-                        dUp = dUp + 2*mUp[i,j]
+            if sWeightType == 'diag':  #WLS
+                for j in range(mRes.shape[0]):
+                    tW[i][j,j] = np.mean(mRes_i[j,:]**2) # error Variance of each leaf
+            elif sWeightType == 'mint_diag':
+                for j in range(mRes.shape[0]):
+                    tW[i][j,j] = np.mean(mRes_i[j,:]**2) # error Variance of each leaf
+                tW[i]=np.linalg.inv(tW[i])      
+            elif sWeightType == 'full':  # full
+                mSigma = mRes_i.T @ mRes_i / mRes_i.shape[1]
+                tW[i] = np.linalg.inv(mSigma)
+            elif sWeightType == 'ols':
+                tW[i] = np.eye(mRes_i.shape[0])         
+            elif sWeightType == 'mint_shrink':
+                n = mRes_i.shape[0]
+                m = mRes_i.shape[1]
+                mWF = mRes_i.T @ mRes_i / m
+                mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
+                
+                #calculate numerator
+                dBottom = 0 # lower side in the expression for tuning parameter lambda
+                for iN in range(n):
+                    for jN in range(n):
+                        if iN>jN:
+                            dBottom = dBottom + 2*( mWF[iN,jN] / np.sqrt(mWF[iN,iN]*mWF[jN,jN]) )
+                            
+                #Calculate denominator            
+                mResScaled = mRes_i / np.sqrt(np.diag(mWF)) # elementwise division to get corr
+                mResScaledSq = mResScaled**2 #get the variance of corr matrix
+                mUp = (1/(m*(m-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/m)*((mResScaled.T @ mResScaled)**2) )
             
-            dLambda = np.max((np.min((dUp/dBottom, 1)), 0))
-            
-            # mW = dLambda * np.linalg.inv(mWD) + (1-dLambda) * np.linalg.inv(mWF)
-            
-            mW = dLambda * mWD + (1-dLambda) * mWF
-            mW = np.linalg.inv(mW)         
-        # elif sWeightType == 'WRMSSE':
-        #     vW=np.loadtxt(os.getcwd()+f"\\data\\M5\\weights.txt")
-        #     vW=vW[:self.tree.mY.shape[0]]
-        #     vW=vW/vW[0]
-        #     mW=np.diag(vW)
-        
-        self.mW=mW
+                dUp = 0 # lower side in the expression for tuning parameter lambda
+                for iM in range(m):
+                    for jM in range(m):
+                        if iM>jM:
+                            dUp = dUp + 2*mUp[iM,jM]
+                
+                dLambda = np.max((np.min((dUp/dBottom, 1)), 0))
+                
+                mW = dLambda * mWD + (1-dLambda) * mWF
+                mW = np.linalg.inv(mW)
+                tW[i]=mW         
+
+        self.tW=tW
     
     def getMatrixP(self , sWeigthType: str):  
         """
@@ -282,12 +282,10 @@ class Tree:
         """
         
         mS=self.mS
-        mW=self.mW
-        
+        tW=self.tW
         
         n=mS.shape[1]
         m=mS.shape[0]
-        self.tP=np.zeros((7,n,m))
         
         if sWeigthType == 'bottom_up':
             m0=np.full((n,m-n),0, dtype=int)
@@ -295,6 +293,7 @@ class Tree:
             mP=np.hstack((m0,mI))
             self.mP=mP
         elif 'top_down' in sWeigthType:
+            self.tP=np.zeros((7,n,m))
             for i in range(self.tP.shape[0]):    
                 m0=np.full((n,m-1),0, dtype=int)
                 iB= len([sublist for sublist in self.list_of_leafs if sublist.count(None) == 0])# integer length of bottom level
@@ -312,8 +311,10 @@ class Tree:
                 mP=np.hstack((vP,m0))
                 self.tP[i] = mP    
         else:
-            mP = (np.linalg.inv(mS.T @ (mW @ mS)) @ (mS.T @ (mW)))
-            self.mP=mP    
+            self.tP=np.zeros((7,n,m))
+            for i in range(self.tP.shape[0]):
+                mP = (np.linalg.inv(mS.T @ (tW[i] @ mS)) @ (mS.T @ (tW[i])))
+                self.tP[i]=mP    
     
     def tune_Prophet(self, random_size=100,initial=1548,period=28,horizon=28,metric='rmse' , mX =None , 
                      dfHolidays=None, dfChangepoints=None):       
