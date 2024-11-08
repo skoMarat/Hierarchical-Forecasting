@@ -227,9 +227,12 @@ class Tree:
             else:
                 mRes_i=self.mRes[:,::-7][:,::-1]
         
-            if sWeightType == 'diag':  #WLS
+            if sWeightType == 'wls':  #WLS
                 for j in range(mRes.shape[0]):
-                    tW[i][j,j] = np.mean(mRes_i[j,:]**2) # error Variance of each leaf
+                    tW[i][j,j] = 1/np.mean(mRes_i[j,:]**2) # error Variance of each leaf
+            elif sWeightType == 'diag':  #WLS
+                for j in range(mRes.shape[0]):
+                    tW[i][j,j] = np.mean(mRes_i[j,:]**2) 
             elif sWeightType == 'mint_diag':
                 for j in range(mRes.shape[0]):
                     tW[i][j,j] = np.mean(mRes_i[j,:]**2) # error Variance of each leaf
@@ -468,7 +471,7 @@ class Tree:
                     dOutputs[sWeightType]['mYtrue'] = tree_iter_eval.mY[:,-horizon:]
                     dOutputs[sWeightType]['mYhat'] = tree_iter.mYhat[:,-horizon:]  #TODO is there need for horizon here?
                     dOutputs[sWeightType]['mYtilde'] = tree_iter.mYtilde[:,-horizon:] #TODO is there need for horizon here?
-                    dOutputs[sWeightType]['mW']=tree_iter.mW
+                    dOutputs[sWeightType]['mW']=tree_iter.tW[0]
             print("CV iterations completed is " + str(iter+1) + " of " + str(iIters))
         
         return dOutputs 

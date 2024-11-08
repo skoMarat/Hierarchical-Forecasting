@@ -37,6 +37,8 @@ def return_loss(mTrue, mPred , mW:np.ndarray, metric:str , slices:list ):
         
         if metric=='MSE':
             loss=np.mean(np.sum((mP-mT)**2,axis=0))
+        elif metric=='TSE':
+            loss=np.sum((mP-mT)**2,axis=0)
         elif metric=='RMSE':
             loss=np.sqrt(np.mean(np.sum((mP-mT)**2,axis=0)))
         elif metric=='MAPE':
@@ -52,6 +54,8 @@ def return_loss(mTrue, mPred , mW:np.ndarray, metric:str , slices:list ):
     
     if metric=='MSE':
         loss=np.mean(np.sum((mPred-mTrue)**2,axis=0))
+    elif metric=='TSE':
+        loss=np.sum((mPred-mTrue)**2,axis=0)
     elif metric=='RMSE':
         loss=np.sqrt(np.mean(np.sum((mPred-mTrue)**2,axis=0)))
     elif metric=='MAPE':
