@@ -217,58 +217,63 @@ class Tree:
         mW:            matrix of weights
         """
 
-        mRes=self.mRes.T
-        mW = np.eye(mRes.shape[1])
-        vNonNanRows = np.setdiff1d(np.arange(0,mRes.shape[0]),  np.unique(np.argwhere(np.isnan(mRes))[:,0]))
-        mRes = mRes[vNonNanRows,:]
+        mRes=self.mRes.copy()
+        tW=np.zeros((7,mRes.shape[0],mRes.shape[0]))
         
-        if sWeightType == 'diag':  #WLS
-            for i in range(mRes.shape[1]):
-                mW[i,i] = np.mean(mRes[:,i]**2) # error Variance of each leaf
-        if sWeightType == 'mint_diag':
-            for i in range(mRes.shape[1]):
-                mW[i,i] = np.mean(mRes[:,i]**2) # error Variance of each leaf
-            mW=np.linalg.inv(mW)      
-        elif sWeightType == 'full':  # full
-            mSigma = mRes.T @ mRes / mRes.shape[0]
-            mW = np.linalg.inv(mSigma)
-        elif sWeightType == 'ols':
-            mW = np.eye(mRes.shape[1])         
-        elif sWeightType == 'mint_shrink':
-            n = mRes.shape[0]
-            m = mRes.shape[1]
-            mWF = mRes.T @ mRes / n
-            mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
-            #calculate numerator
-            dBottom = 0 # lower side in the expression for tuning parameter lambda
-            for i in range(m):
-                for j in range(m):
-                    if i>j:
-                        dBottom = dBottom + 2*( mWF[i,j] / np.sqrt(mWF[i,i]*mWF[j,j]) )
-            #Calculate denominator            
-            mResScaled = mRes / np.sqrt(np.diag(mWF)) # elementwise division
-            mResScaledSq = mResScaled**2
-            mUp = (1/(n*(n-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/n)*((mResScaled.T @ mResScaled)**2) )
+
+        for i in range(tW.shape[0]):
+            if i!=6:
+                mRes_i=self.mRes[:,:-6+i][:,::-7][:,::-1]
+            else:
+                mRes_i=self.mRes[:,::-7][:,::-1]
         
-            dUp = 0 # lower side in the expression for tuning parameter lambda
-            for i in range(m):
-                for j in range(m):
-                    if i>j:
-                        dUp = dUp + 2*mUp[i,j]
+            if sWeightType == 'wls':  #WLS
+                for j in range(mRes.shape[0]):
+                    tW[i][j,j] = 1/np.mean(mRes_i[j,:]**2) # error Variance of each leaf
+            elif sWeightType == 'diag':  #WLS
+                for j in range(mRes.shape[0]):
+                    tW[i][j,j] = np.mean(mRes_i[j,:]**2) 
+            elif sWeightType == 'mint_diag':
+                for j in range(mRes.shape[0]):
+                    tW[i][j,j] = np.mean(mRes_i[j,:]**2) # error Variance of each leaf
+                tW[i]=np.linalg.inv(tW[i])      
+            elif sWeightType == 'mint_full':  # full
+                mSigma =  mRes_i@mRes_i.T / mRes_i.shape[1]
+                tW[i] = np.linalg.inv(mSigma)
+            elif sWeightType == 'ols':
+                tW[i] = np.eye(mRes_i.shape[0])         
+            elif sWeightType == 'mint_shrink':
+                n = mRes_i.shape[0]
+                m = mRes_i.shape[1]
+                mWF =  mRes_i@mRes_i.T/ m
+                mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
+                
+                #calculate numerator
+                dBottom = 0 # lower side in the expression for tuning parameter lambda
+                for iN in range(n):
+                    for jN in range(n):
+                        if iN>jN:
+                            dBottom = dBottom + 2*( mWF[iN,jN] / np.sqrt(mWF[iN,iN]*mWF[jN,jN]) )
+                            
+                #Calculate denominator            
+                mResScaled = mRes_i.T / np.sqrt(np.diag(mWF)) # elementwise division
+                mResScaledSq = mResScaled**2 #get the variance of corr matrix
+                mUp = (1/(m*(m-1))) * ( (mResScaledSq.T @ mResScaledSq) - (1/m)*((mResScaled.T @ mResScaled)**2) )
+                # mUp = (1/(m*(m-1))) * ( ( mResScaledSq @ mResScaledSq.T ) - (1/m)*(( mResScaled @ mResScaled.T )**2) )
             
-            dLambda = np.max((np.min((dUp/dBottom, 1)), 0))
-            
-            # mW = dLambda * np.linalg.inv(mWD) + (1-dLambda) * np.linalg.inv(mWF)
-            
-            mW = dLambda * mWD + (1-dLambda) * mWF
-            mW = np.linalg.inv(mW)         
-        # elif sWeightType == 'WRMSSE':
-        #     vW=np.loadtxt(os.getcwd()+f"\\data\\M5\\weights.txt")
-        #     vW=vW[:self.tree.mY.shape[0]]
-        #     vW=vW/vW[0]
-        #     mW=np.diag(vW)
-        
-        self.mW=mW
+                dUp = 0 # lower side in the expression for tuning parameter lambda
+                for iN in range(n):
+                    for jN in range(n):
+                        if iN>jN:
+                            dUp = dUp + 2*mUp[iN,jN]
+                
+                dLambda = np.max((np.min((dUp/dBottom, 1)), 0))
+                
+                mW = dLambda * mWD + (1-dLambda) * mWF
+                mW = np.linalg.inv(mW)
+                tW[i]=mW         
+
+        self.tW=tW
     
     def getMatrixP(self , sWeigthType: str):  
         """
@@ -282,37 +287,39 @@ class Tree:
         """
         
         mS=self.mS
-        mW=self.mW
+        tW=self.tW
+        
+        n=mS.shape[1]
+        m=mS.shape[0]
         
         if sWeigthType == 'bottom_up':
-            n=mS.shape[1]
-            m=mS.shape[0]
             m0=np.full((n,m-n),0, dtype=int)
             mI=np.eye(n)
             mP=np.hstack((m0,mI))
             self.mP=mP
         elif 'top_down' in sWeigthType:
-            n=mS.shape[1]
-            m=mS.shape[0]
-            m0=np.full((n,m-1),0, dtype=int)
-            iB= len([sublist for sublist in self.list_of_leafs if sublist.count(None) == 0])# integer length of bottom level
-            if sWeigthType=='top_down_hp': #historical proportions
-                #TODO 70 dynamic
-                vP = np.mean((self.mY[-iB:]/self.mY[0,:]),axis=1)
-            elif sWeigthType=='top_down_ph': #proportions of the historical averages
-                vP = np.mean(self.mY[-iB:],axis=1)/np.mean(self.mY[0,:],axis=0)
-            # elif sWeigthType=='top_down_fp': #forecast proportions
-            #     vP = 
-            vP=vP.reshape((iB,1))
-            mP=np.hstack((vP,m0))
-            self.mP=mP    
-        # else:
-        #     mWinv = np.linalg.inv(mW)
-        #     mP= (np.linalg.inv(mS.T @ (mWinv @ mS)) @ (mS.T @ (mWinv)))
-        #     self.mP=mP
+            self.tP=np.zeros((7,n,m))
+            for i in range(self.tP.shape[0]):    
+                m0=np.full((n,m-1),0, dtype=int)
+                iB= len([sublist for sublist in self.list_of_leafs if sublist.count(None) == 0])# integer length of bottom level
+                if i!=6:
+                    mY_i=self.mY[:,:-6+i][:,::-7][:,::-1]
+                else:
+                    mY_i=self.mY[:,::-7][:,::-1]
+                    
+                if sWeigthType=='top_down_hp': #historical proportions                    
+                    vP = np.mean((mY_i[-iB:,:]/mY_i[0,:]) , axis=1)  #TODO 7 dynamic
+                elif sWeigthType=='top_down_ph': #proportions of the historical averages
+                    vP = np.mean(mY_i[-iB:,:] , axis=1)  / np.mean(mY_i[0,:] , axis=0)  #TODO 7 dynamic
+
+                vP=vP.reshape((iB,1))
+                mP=np.hstack((vP,m0))
+                self.tP[i] = mP    
         else:
-             mP = (np.linalg.inv(mS.T @ (mW @ mS)) @ (mS.T @ (mW)))
-             self.mP=mP    
+            self.tP=np.zeros((7,n,m))
+            for i in range(self.tP.shape[0]):
+                mP = (np.linalg.inv(mS.T @ (tW[i] @ mS)) @ (mS.T @ (tW[i])))
+                self.tP[i]=mP    
     
     def tune_Prophet(self, random_size=100,initial=1548,period=28,horizon=28,metric='rmse' , mX =None , 
                      dfHolidays=None, dfChangepoints=None):       
@@ -400,12 +407,19 @@ class Tree:
         Performs whole reconciliation algorithm 
         """                                  
         self.getMatrixW(sWeightType)      
-        self.getMatrixP(sWeightType)            
-        self.mYtilde=np.dot(np.dot(self.mS,self.mP),self.mYhat)
+        self.getMatrixP(sWeightType)
+        self.mYtilde=np.zeros((self.mY.shape[0],self.mYhat.shape[1]))      
+            
+        if sWeightType=='bottom_up':
+            self.mYtilde=self.mS@self.mP@self.mYhat
+        else:
+            for i in range(self.mYhat.shape[1]):
+                self.mYtilde[:,i]=self.mS@self.tP[i%7]@self.mYhat[:,i]
         
+                    
         print('Reconciliation is complete')
     
-    def cross_validation(self , dfHolidays, initial, period, horizon ):
+    def cross_validation(self , dfHolidays, initial, period, horizon , lMethods ):
         """Performs cross_validation and returns matrices required for assesment
 
         Args:
@@ -429,8 +443,6 @@ class Tree:
         print("Number of iterations is " + str(iIters))
  
         dOutputs={}
-        lMethods=["bottom_up", "top_down_ph" ,"top_down_hp",
-                  "ols","diag" ,'mint_full','mint_shrink','mint_diag']
         
         for method in lMethods:
             dOutputs[method]={}
@@ -446,7 +458,7 @@ class Tree:
                 break    
             
             tree_iter.forecast_Prophet(iOoS=horizon, dfHolidays=dfHolidays, ddParams=self.ddParams)
-            print("CV iterations completed = " + str(iter+1) + " of " + str(iIters))
+            
             
             for sWeightType in lMethods:            
                 tree_iter.reconcile(sWeightType)  
@@ -459,7 +471,8 @@ class Tree:
                     dOutputs[sWeightType]['mYtrue'] = tree_iter_eval.mY[:,-horizon:]
                     dOutputs[sWeightType]['mYhat'] = tree_iter.mYhat[:,-horizon:]  #TODO is there need for horizon here?
                     dOutputs[sWeightType]['mYtilde'] = tree_iter.mYtilde[:,-horizon:] #TODO is there need for horizon here?
-                    dOutputs[sWeightType]['mW']=tree_iter.mW
+                    dOutputs[sWeightType]['mW']=tree_iter.tW[0]
+            print("CV iterations completed is " + str(iter+1) + " of " + str(iIters))
         
         return dOutputs 
 
