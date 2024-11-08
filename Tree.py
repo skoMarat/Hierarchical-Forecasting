@@ -217,8 +217,9 @@ class Tree:
         mW:            matrix of weights
         """
 
-        tW=np.zeros((7,mRes.shape[0],mRes.shape[0]))
         mRes=self.mRes.copy()
+        tW=np.zeros((7,mRes.shape[0],mRes.shape[0]))
+        
 
         for i in range(tW.shape[0]):
             if i!=6:
@@ -233,15 +234,15 @@ class Tree:
                 for j in range(mRes.shape[0]):
                     tW[i][j,j] = np.mean(mRes_i[j,:]**2) # error Variance of each leaf
                 tW[i]=np.linalg.inv(tW[i])      
-            elif sWeightType == 'full':  # full
-                mSigma = mRes_i.T @ mRes_i / mRes_i.shape[1]
+            elif sWeightType == 'mint_full':  # full
+                mSigma =  mRes_i@mRes_i.T / mRes_i.shape[1]
                 tW[i] = np.linalg.inv(mSigma)
             elif sWeightType == 'ols':
                 tW[i] = np.eye(mRes_i.shape[0])         
             elif sWeightType == 'mint_shrink':
                 n = mRes_i.shape[0]
                 m = mRes_i.shape[1]
-                mWF = mRes_i.T @ mRes_i / m
+                mWF =  mRes_i@mRes_i.T/ m
                 mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
                 
                 #calculate numerator
@@ -252,15 +253,16 @@ class Tree:
                             dBottom = dBottom + 2*( mWF[iN,jN] / np.sqrt(mWF[iN,iN]*mWF[jN,jN]) )
                             
                 #Calculate denominator            
-                mResScaled = mRes_i / np.sqrt(np.diag(mWF)) # elementwise division to get corr
+                mResScaled = mRes_i.T / np.sqrt(np.diag(mWF)) # elementwise division
                 mResScaledSq = mResScaled**2 #get the variance of corr matrix
-                mUp = (1/(m*(m-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/m)*((mResScaled.T @ mResScaled)**2) )
+                mUp = (1/(m*(m-1))) * ( (mResScaledSq.T @ mResScaledSq) - (1/m)*((mResScaled.T @ mResScaled)**2) )
+                # mUp = (1/(m*(m-1))) * ( ( mResScaledSq @ mResScaledSq.T ) - (1/m)*(( mResScaled @ mResScaled.T )**2) )
             
                 dUp = 0 # lower side in the expression for tuning parameter lambda
-                for iM in range(m):
-                    for jM in range(m):
-                        if iM>jM:
-                            dUp = dUp + 2*mUp[iM,jM]
+                for iN in range(n):
+                    for jN in range(n):
+                        if iN>jN:
+                            dUp = dUp + 2*mUp[iN,jN]
                 
                 dLambda = np.max((np.min((dUp/dBottom, 1)), 0))
                 
@@ -404,12 +406,14 @@ class Tree:
         self.getMatrixW(sWeightType)      
         self.getMatrixP(sWeightType)
         self.mYtilde=np.zeros((self.mY.shape[0],self.mYhat.shape[1]))      
-        if 'top_down' in sWeightType:    
+            
+        if sWeightType=='bottom_up':
+            self.mYtilde=self.mS@self.mP@self.mYhat
+        else:
             for i in range(self.mYhat.shape[1]):
                 self.mYtilde[:,i]=self.mS@self.tP[i%7]@self.mYhat[:,i]
-        else:
-            self.mYtilde=self.mS@self.mP@self.mYhat
         
+                    
         print('Reconciliation is complete')
     
     def cross_validation(self , dfHolidays, initial, period, horizon , lMethods ):
@@ -451,7 +455,7 @@ class Tree:
                 break    
             
             tree_iter.forecast_Prophet(iOoS=horizon, dfHolidays=dfHolidays, ddParams=self.ddParams)
-            print("CV iterations completed = " + str(iter+1) + " of " + str(iIters))
+            
             
             for sWeightType in lMethods:            
                 tree_iter.reconcile(sWeightType)  
@@ -465,6 +469,7 @@ class Tree:
                     dOutputs[sWeightType]['mYhat'] = tree_iter.mYhat[:,-horizon:]  #TODO is there need for horizon here?
                     dOutputs[sWeightType]['mYtilde'] = tree_iter.mYtilde[:,-horizon:] #TODO is there need for horizon here?
                     dOutputs[sWeightType]['mW']=tree_iter.mW
+            print("CV iterations completed is " + str(iter+1) + " of " + str(iIters))
         
         return dOutputs 
 
