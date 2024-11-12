@@ -39,6 +39,8 @@ def return_loss(mTrue, mPred , mW:np.ndarray, metric:str , slices:list ):
             loss=np.mean(np.sum((mP-mT)**2,axis=0))
         elif metric=='RMSE':
             loss=np.sqrt(np.mean(np.sum((mP-mT)**2,axis=0)))
+        elif metric=='TSE':
+            loss=np.sum((mP-mT)**2,axis=0)
         elif metric=='MAPE':
             loss=np.mean(np.sum(np.abs(mP-mT)/mT,axis=0))
         elif metric=='MWvarSE':
@@ -56,6 +58,8 @@ def return_loss(mTrue, mPred , mW:np.ndarray, metric:str , slices:list ):
         loss=np.sqrt(np.mean(np.sum((mPred-mTrue)**2,axis=0)))
     elif metric=='MAPE':
         loss=np.mean(np.sum(np.abs(mPred-mTrue)/mTrue,axis=0))
+    elif metric=='TSE':
+        loss=np.sum((mPred-mTrue)**2,axis=0)
     # elif metric=='RMSSE':
     #     loss=np.sqrt(np.mean((mTrue-mPred)**2 , axis=1)  / np.mean( (mY[:,1:] - mY[:,:-1])**2 , axis=1))    
     # elif metric=='WRMSSE':
@@ -106,7 +110,7 @@ def getCVResults( h:int, dOutputs ,metric:str , slices: list , iters: int , roll
     """
 
     lMethods=list(dOutputs.keys())[1:]
-    mW=dOutputs['diag']['mW']
+    mW=dOutputs['wls']['mW']
      
     if iters==None:
         mYtrue=dOutputs["bottom_up"]['mYtrue']
@@ -171,12 +175,12 @@ def getCVResults( h:int, dOutputs ,metric:str , slices: list , iters: int , roll
     if relative==True:
         dfResults = matrix_to_df(np.round(mResults,2),
                         ['Total','State','Store','Cat.','Dept.','Average'], #TODO 
-                        ["BU"]+lMethods,
+                        ["bottom_up"]+lMethods,
                         ["Base","BU"])
     else:
         dfResults = matrix_to_df(np.round(mResults,2),
                         ['Total','State','Store','Cat.','Dept.','Average'], #TODO 
-                        ["BU"]+lMethods)
+                        ["bottom_up"]+lMethods)
         
     return dfResults
     

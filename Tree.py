@@ -13,8 +13,7 @@ import re
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from statsmodels.tsa.arima.model import ARIMA
-from sklearn.linear_model import LinearRegression
+from sklearn.covariance import MinCovDet
 pd.set_option('display.float_format', lambda x: '{:.2f}'.format(x))
 import statsmodels.api as sm
 import warnings
@@ -217,48 +216,58 @@ class Tree:
         mW:            matrix of weights
         """
 
-        mRes=self.mRes.T
-        mW = np.eye(mRes.shape[1])
-        vNonNanRows = np.setdiff1d(np.arange(0,mRes.shape[0]),  np.unique(np.argwhere(np.isnan(mRes))[:,0]))
-        mRes = mRes[vNonNanRows,:]
+        mRes=self.mRes.copy()
+        mW = np.eye(mRes.shape[0])
+        # vNonNanRows = np.setdiff1d(np.arange(0,mRes.shape[0]),  np.unique(np.argwhere(np.isnan(mRes))[:,0]))
+        # mRes = mRes[vNonNanRows,:]
+        n=mRes.shape[0]
+        m=mRes.shape[1]
+        mSigma = (mRes@mRes.T)/m
         
-        if sWeightType == 'diag':  #WLS
-            for i in range(mRes.shape[1]):
-                mW[i,i] = np.mean(mRes[:,i]**2) # error Variance of each leaf
-        if sWeightType == 'mint_diag':
-            for i in range(mRes.shape[1]):
-                mW[i,i] = np.mean(mRes[:,i]**2) # error Variance of each leaf
+        mRes_centered = mRes - np.mean(mRes, axis=1).reshape(114,1)
+        mSigmaTilde = (mRes_centered@mRes_centered.T)/(m-1)
+        mSigma=mSigmaTilde
+        
+        if sWeightType == 'wls':  #WLS
+            mW= np.diag(1/np.diag(mSigma)) # reciprocal error Variance of each leaf
+        elif sWeightType == 'mint_diag':
+            mW=np.diag(np.diag(mSigma))
             mW=np.linalg.inv(mW)      
-        elif sWeightType == 'full':  # full
-            mSigma = mRes.T @ mRes / mRes.shape[0]
-            mW = np.linalg.inv(mSigma)
+        elif sWeightType == 'mint_sample':  # full
+            mW = np.linalg.inv(mSigma) 
         elif sWeightType == 'ols':
-            mW = np.eye(mRes.shape[1])         
+            mW = np.eye(n)
+        elif sWeightType == 'mint_mcd':
+            mW = MinCovDet(support_fraction = 0.7, assume_centered=True).fit(mRes_centered.T ).covariance_
+            mW = np.linalg.inv(mW) 
+        # elif sWeightType == 'mint_lasso': 
+        #     mW = MinCovDet().fit(mRes.T ).covariance_
+        #     mW = np.linalg.inv(mW)          
         elif sWeightType == 'mint_shrink':
-            n = mRes.shape[0]
-            m = mRes.shape[1]
-            mWF = mRes.T @ mRes / n
+            mWF = mSigma.copy()
             mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
             #calculate numerator
             dBottom = 0 # lower side in the expression for tuning parameter lambda
-            for i in range(m):
-                for j in range(m):
+            for i in range(n):
+                for j in range(n):
                     if i>j:
                         dBottom = dBottom + 2*( mWF[i,j] / np.sqrt(mWF[i,i]*mWF[j,j]) )
+                        
             #Calculate denominator            
-            mResScaled = mRes / np.sqrt(np.diag(mWF)) # elementwise division
-            mResScaledSq = mResScaled**2
-            mUp = (1/(n*(n-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/n)*((mResScaled.T @ mResScaled)**2) )
+            mResScaled = mRes.T / np.sqrt(np.diag(mWF)) # elementwise division, standardize residuals
+            # mResScaledSq = mResScaled**2  
+            # mUp = (1/(m*(m-1))) * ( (mResScaledSq @ mResScaledSq.T)- (1/m)*((mResScaled @ mResScaled.T)**2) )  
+            
+            mResScaledSq = mResScaled**2  #w_ii 
+            mUp = (1/(m*(m-1))) * ( (mResScaledSq @ mResScaledSq.T)- (1/m)*((mResScaled @ mResScaled.T)))**2   #w_ii-w_bar #TODO m(m-1) ? 
         
             dUp = 0 # lower side in the expression for tuning parameter lambda
-            for i in range(m):
-                for j in range(m):
+            for i in range(n):
+                for j in range(n):
                     if i>j:
                         dUp = dUp + 2*mUp[i,j]
             
             dLambda = np.max((np.min((dUp/dBottom, 1)), 0))
-            
-            # mW = dLambda * np.linalg.inv(mWD) + (1-dLambda) * np.linalg.inv(mWF)
             
             mW = dLambda * mWD + (1-dLambda) * mWF
             mW = np.linalg.inv(mW)         
@@ -405,7 +414,7 @@ class Tree:
         
         print('Reconciliation is complete')
     
-    def cross_validation(self , dfHolidays, initial, period, horizon ):
+    def cross_validation(self , dfHolidays, initial, period, horizon , lMethods ):
         """Performs cross_validation and returns matrices required for assesment
 
         Args:
@@ -429,8 +438,6 @@ class Tree:
         print("Number of iterations is " + str(iIters))
  
         dOutputs={}
-        lMethods=["bottom_up", "top_down_ph" ,"top_down_hp",
-                  "ols","diag" ,'mint_full','mint_shrink','mint_diag']
         
         for method in lMethods:
             dOutputs[method]={}
@@ -446,7 +453,6 @@ class Tree:
                 break    
             
             tree_iter.forecast_Prophet(iOoS=horizon, dfHolidays=dfHolidays, ddParams=self.ddParams)
-            print("CV iterations completed = " + str(iter+1) + " of " + str(iIters))
             
             for sWeightType in lMethods:            
                 tree_iter.reconcile(sWeightType)  
@@ -460,6 +466,7 @@ class Tree:
                     dOutputs[sWeightType]['mYhat'] = tree_iter.mYhat[:,-horizon:]  #TODO is there need for horizon here?
                     dOutputs[sWeightType]['mYtilde'] = tree_iter.mYtilde[:,-horizon:] #TODO is there need for horizon here?
                     dOutputs[sWeightType]['mW']=tree_iter.mW
+            print("CV iterations completed = " + str(iter+1) + " of " + str(iIters))
         
         return dOutputs 
 
