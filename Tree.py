@@ -217,35 +217,31 @@ class Tree:
         mW:            matrix of weights
         """
 
-        mRes=self.mRes.copy()
+        mRes=self.mRes - np.mean(self.mRes, axis=1).reshape(114,1)
         tW=np.zeros((7,mRes.shape[0],mRes.shape[0]))
         
 
         for i in range(tW.shape[0]):
             if i!=6:
-                mRes_i=self.mRes[:,:-6+i][:,::-7][:,::-1]
+                mRes_i=mRes[:,:-6+i][:,::-7][:,::-1]
             else:
-                mRes_i=self.mRes[:,::-7][:,::-1]
+                mRes_i=mRes[:,::-7][:,::-1]
+              
+            n=mRes_i.shape[0]
+            m=mRes_i.shape[1]
+  
+            mSigma_i = (mRes_i@mRes_i.T)/(m-1)
         
             if sWeightType == 'wls':  #WLS
-                for j in range(mRes.shape[0]):
-                    tW[i][j,j] = 1/np.mean(mRes_i[j,:]**2) # error Variance of each leaf
-            elif sWeightType == 'diag':  #WLS
-                for j in range(mRes.shape[0]):
-                    tW[i][j,j] = np.mean(mRes_i[j,:]**2) 
+                tW[i] = np.diag(1/np.diag(mSigma_i)) # error Variance of each leaf
             elif sWeightType == 'mint_diag':
-                for j in range(mRes.shape[0]):
-                    tW[i][j,j] = np.mean(mRes_i[j,:]**2) # error Variance of each leaf
-                tW[i]=np.linalg.inv(tW[i])      
-            elif sWeightType == 'mint_full':  # full
-                mSigma =  mRes_i@mRes_i.T / mRes_i.shape[1]
-                tW[i] = np.linalg.inv(mSigma)
+                tW[i] =  np.linalg.inv(np.diag(np.diag(mSigma_i)))      
+            elif sWeightType == 'mint_sample':  # full
+                tW[i] = np.linalg.inv(mSigma_i)
             elif sWeightType == 'ols':
-                tW[i] = np.eye(mRes_i.shape[0])         
+                tW[i] = np.eye(n)         
             elif sWeightType == 'mint_shrink':
-                n = mRes_i.shape[0]
-                m = mRes_i.shape[1]
-                mWF =  mRes_i@mRes_i.T/ m
+                mWF =  mSigma_i.copy()
                 mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
                 
                 #calculate numerator
