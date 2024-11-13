@@ -252,7 +252,8 @@ class Tree:
             # mUp = (1/(m*(m-1))) * ( (mResScaledSq @ mResScaledSq.T)- (1/m)*((mResScaled @ mResScaled.T)**2) )  
             
             mResScaledSq = mResScaled**2  #w_ii 
-            mUp = (1/(m*(m-1))) * ( (mResScaledSq @ mResScaledSq.T)- (1/m)*((mResScaled @ mResScaled.T)))**2   #w_ii-w_bar #TODO m(m-1) ? 
+            mUp = (1/(m*(m-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/m)*((mResScaled.T @ mResScaled)))**2   #w_ii-w_bar #TODO m(m-1) ? 
+          
         
             dUp = 0 # lower side in the expression for tuning parameter lambda
             for i in range(n):
