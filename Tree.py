@@ -236,13 +236,7 @@ class Tree:
         elif sWeightType == 'mint_sample':  # full
             mW = np.linalg.inv(mSigma) 
         elif sWeightType == 'ols':
-            mW = np.eye(n)
-        elif sWeightType == 'mint_mcd':
-            mW = MinCovDet(support_fraction = 0.7, assume_centered=True).fit(mRes_centered.T ).covariance_
-            mW = np.linalg.inv(mW) 
-        # elif sWeightType == 'mint_lasso': 
-        #     mW = MinCovDet().fit(mRes.T ).covariance_
-        #     mW = np.linalg.inv(mW)          
+            mW = np.eye(n)    
         elif sWeightType == 'mint_shrink':
             mWF = mSigma.copy()
             mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
@@ -251,8 +245,7 @@ class Tree:
             for i in range(n):
                 for j in range(n):
                     if i>j:
-                        dBottom = dBottom + 2*( mWF[i,j] / np.sqrt(mWF[i,i]*mWF[j,j]) )
-                        
+                        dBottom = dBottom + 2*( mWF[i,j] / np.sqrt(mWF[i,i]*mWF[j,j]) )            
             #Calculate denominator            
             mResScaled = mRes.T / np.sqrt(np.diag(mWF)) # elementwise division, standardize residuals
             # mResScaledSq = mResScaled**2  
