@@ -222,54 +222,74 @@ class Tree:
         # mRes = mRes[vNonNanRows,:]
         n=mRes.shape[0]
         m=mRes.shape[1]
-        mSigma = (mRes@mRes.T)/m
+        # mSigma = (mRes@mRes.T)/m
         
-        mRes_centered = mRes - np.mean(mRes, axis=1).reshape(114,1)
-        mSigmaTilde = (mRes_centered@mRes_centered.T)/(m-1)
-        mSigma=mSigmaTilde
+        mRes_centered = mRes - np.mean(mRes, axis=1).reshape(n,1)
+        mSigma = (mRes_centered@mRes_centered.T)/(m-1)
         
-        if sWeightType == 'wls':  #WLS
-            mW= np.diag(1/np.diag(mSigma)) # reciprocal error Variance of each leaf
-        elif sWeightType == 'mint_diag':
+        if sWeightType == 'ols':  
+            mW = np.eye(n) 
+        elif sWeightType == 'mint_ss':  #structural scaling
+            mW=np.diag(np.sum(self.mS, axis=1))
+            mW=np.linalg.inv(mW)   
+        elif sWeightType == 'mint_diag': #wls
             mW=np.diag(np.diag(mSigma))
             mW=np.linalg.inv(mW)      
         elif sWeightType == 'mint_sample':  # full
-            mW = np.linalg.inv(mSigma) 
-        elif sWeightType == 'ols':
-            mW = np.eye(n)    
+            mW = np.linalg.inv(mSigma)   
         elif sWeightType == 'mint_shrink':
             mWF = mSigma.copy()
             mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
-            #calculate numerator
-            dBottom = 0 # lower side in the expression for tuning parameter lambda
-            for i in range(n):
-                for j in range(n):
-                    if i>j:
-                        dBottom = dBottom + 2*( mWF[i,j] / np.sqrt(mWF[i,i]*mWF[j,j]) )            
-            #Calculate denominator            
-            mResScaled = mRes.T / np.sqrt(np.diag(mWF)) # elementwise division, standardize residuals
+            
+            # #calculate numerator
+            # dBottom = 0 # lower side in the expression for tuning parameter lambda
+            # for i in range(n):
+            #     for j in range(n):
+            #         if i>j:
+            #             dBottom = dBottom + 2*( mWF[i,j] / np.sqrt(mWF[i,i]*mWF[j,j]) )            
+            # #Calculate denominator            
+            # mResScaled = mRes_centered.T / np.sqrt(np.diag(mWF)) # elementwise division, standardize residuals
             # mResScaledSq = mResScaled**2  
             # mUp = (1/(m*(m-1))) * ( (mResScaledSq @ mResScaledSq.T)- (1/m)*((mResScaled @ mResScaled.T)**2) )  
             
-            mResScaledSq = mResScaled**2  #w_ii 
-            mUp = (1/(m*(m-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/m)*((mResScaled.T @ mResScaled)))**2   #w_ii-w_bar #TODO m(m-1) ? 
+            # # mResScaledSq = mResScaled**2  #w_ii 
+            # # mUp = (1/(m*(m-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/m)*((mResScaled.T @ mResScaled)))**2   #w_ii-w_bar 
           
         
-            dUp = 0 # lower side in the expression for tuning parameter lambda
+            # dUp = 0 # lower side in the expression for tuning parameter lambda
+            # for i in range(n):
+            #     for j in range(n):
+            #         if i>j:
+            #             dUp = dUp + 2*mUp[i,j]
+            
+            # dLambda = np.max((np.min((dUp/dBottom, 1)), 0))           
+
+            sum_var_emp_corr = np.float64(0.0)
+            sum_sq_emp_corr = np.float64(0.0)
+            factor_shrinkage = np.float64(1 / (m * (m - 1)))
+
             for i in range(n):
-                for j in range(n):
-                    if i>j:
-                        dUp = dUp + 2*mUp[i,j]
-            
-            dLambda = np.max((np.min((dUp/dBottom, 1)), 0))
-            
+                # Mean of the standardized residuals
+                X_i =  mRes_centered[i]
+                Xs_i = X_i / (np.std(mRes[i]) )
+                Xs_i_mean = np.mean(Xs_i)
+                for j in range(i + 1):
+                    X_j = mRes_centered[j]
+                    # Off-diagonal sums
+                    if i != j:
+                        Xs_j = X_j / (np.std(mRes[j]))
+                        Xs_j_mean = np.mean(Xs_j)
+                        # Sum off-diagonal variance of empirical correlation
+                        w = (Xs_i - Xs_i_mean) * (Xs_j - Xs_j_mean)
+                        w_mean = np.mean(w)
+                        sum_var_emp_corr += np.sum(np.square(w - w_mean))
+                        # Sum squared empirical correlation
+                        sum_sq_emp_corr += w_mean**2
+
+            # Calculate shrinkage intensity 
+            dLambda = max(min((factor_shrinkage * sum_var_emp_corr) / (sum_sq_emp_corr ), 1.0), 0.0)
             mW = dLambda * mWD + (1-dLambda) * mWF
-            mW = np.linalg.inv(mW)         
-        # elif sWeightType == 'WRMSSE':
-        #     vW=np.loadtxt(os.getcwd()+f"\\data\\M5\\weights.txt")
-        #     vW=vW[:self.tree.mY.shape[0]]
-        #     vW=vW/vW[0]
-        #     mW=np.diag(vW)
+            mW = np.linalg.inv(mW)    
         
         self.mW=mW
     
