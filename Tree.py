@@ -27,6 +27,7 @@ from dateutil.relativedelta import relativedelta
 from leaf import *
 from utils import *
 from forecast_prophet import *
+from forecast_arima import *
 import copy
 from itertools import chain
 from datetime import datetime
@@ -215,30 +216,7 @@ class Tree:
             mW = np.linalg.inv(mSigma)   
         elif sWeightType == 'mint_shrink':
             mWF = mSigma.copy()
-            mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0
-            
-            # #calculate numerator
-            # dBottom = 0 # lower side in the expression for tuning parameter lambda
-            # for i in range(n):
-            #     for j in range(n):
-            #         if i>j:
-            #             dBottom = dBottom + 2*( mWF[i,j] / np.sqrt(mWF[i,i]*mWF[j,j]) )            
-            # #Calculate denominator            
-            # mResScaled = mRes_centered.T / np.sqrt(np.diag(mWF)) # elementwise division, standardize residuals
-            # mResScaledSq = mResScaled**2  
-            # mUp = (1/(m*(m-1))) * ( (mResScaledSq @ mResScaledSq.T)- (1/m)*((mResScaled @ mResScaled.T)**2) )  
-            
-            # # mResScaledSq = mResScaled**2  #w_ii 
-            # # mUp = (1/(m*(m-1))) * ( (mResScaledSq.T @ mResScaledSq)- (1/m)*((mResScaled.T @ mResScaled)))**2   #w_ii-w_bar 
-          
-        
-            # dUp = 0 # lower side in the expression for tuning parameter lambda
-            # for i in range(n):
-            #     for j in range(n):
-            #         if i>j:
-            #             dUp = dUp + 2*mUp[i,j]
-            
-            # dLambda = np.max((np.min((dUp/dBottom, 1)), 0))           
+            mWD = np.diag(np.diag(mWF)) # all non-diagonal entries of mWF set to 0        
 
             sum_var_emp_corr = np.float64(0.0)
             sum_sq_emp_corr = np.float64(0.0)
@@ -324,25 +302,71 @@ class Tree:
         print("Number of CV iterations used for tuning = " + str(iIters))
         
         self.ddParams={}
-        for i, _ in enumerate(self.list_of_leafs):
-            dfData = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])           
-            pht = Forecast_Prophet(dfData=dfData, 
-                                   dfX=mX[i] if mX is not None else None, 
-                                   dfHolidays=dfHolidays,
-                                   dfChangepoints=dfChangepoints)
+        if self.type=='spatial':
+            for i, _ in enumerate(self.list_of_leafs):
+                dfData = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])           
+                pht = Forecast_Prophet(dfData=dfData, 
+                                    dfX=mX[i] if mX is not None else None, 
+                                    dfHolidays=dfHolidays,
+                                    dfChangepoints=dfChangepoints)
 
-            pht.tune(random_size=random_size,
-                    initial=initial,
-                    period=period,
-                    horizon=horizon,
-                    metric=metric, 
-                    parallel='processes',
-                    plot=False) 
+                pht.tune(random_size=random_size,
+                        initial=initial,
+                        period=period,
+                        horizon=horizon,
+                        metric=metric, 
+                        parallel='processes',
+                        plot=False) 
+                
+                self.ddParams[i]=pht.dParams
+        elif self.type=='temporal':
+            for i,sFreq in enumerate(self.levels):
+                data=self.data.resample(sFreq).sum()
+                dfY = pd.DataFrame(data=data.values , index=data.index , columns=['y'])
+                
+                if mX is not None:  #TODO
+                    print('No mX')
+                else:
+                    dfX=None
+                    
+                pht = Forecast_Prophet(dfData=dfY, dfX=dfX,  #TODO  for weekly data maybe other params?
+                                        dfHolidays=dfHolidays, dfChangepoints=dfChangepoints)
+                pht.tune(random_size=random_size,
+                        initial=initial,
+                        period=period,
+                        horizon=horizon,
+                        metric=metric, 
+                        parallel='processes',
+                        plot=False) 
+                self.ddParams[i]=pht.dParams
             
-            self.ddParams[i]=pht.dParams
         #save parameters
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # Format: YYYYMMDD_HHMMSS
-        with open(os.path.join(os.getcwd(), f"data\\M5\\ddParams_{timestamp}.pkl"), "wb") as myFile:
+        with open(os.path.join(path="c:\\Users\\31683\\Desktop\\data\\M5\\ddParams_Prophet_{timestamp}.pkl"), "wb") as myFile:
+            pickle.dump(self.ddParams, myFile) 
+            
+    def tune_ARIMA(self):       
+        """
+        Tunes ARIMA and saves parameters per leaf into ddParams
+        """  
+        self.ddParams={}
+        if self.type=='spatial': 
+            for i, _ in enumerate(self.list_of_leafs):
+                dfData = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])
+                arima=Forecast_ARIMA(dfData=dfData)
+                arima.tune()
+                self.ddParams[i]=arima.dParams
+        elif self.type=='temporal':
+            for i,sFreq in enumerate(self.levels):
+                data=self.data.resample(sFreq).sum()
+                dfY = pd.DataFrame(data=data.values , index=data.index , columns=['y'])
+                arima=Forecast_ARIMA(dfData=dfY)
+                arima.tune()
+                self.ddParams[i]=arima.dParams
+                
+        #save parameters
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # Format: YYYYMMDD_HHMMSS
+        with open(os.path.join(path="c:\\Users\\31683\\Desktop\\data\\M5\\ddParams_ARIMA_{timestamp}.pkl"), "wb") as myFile:
             pickle.dump(self.ddParams, myFile) 
                 
     def forecast_Prophet(self , iOoS:int, mX=None, dfHolidays=None, dfChangepoints=None , ddParams = None):  #get mYhat
@@ -406,6 +430,52 @@ class Tree:
                 self.mYhatIS[i] = pht.vYhatIS                                       
                         
         self.mRes=self.mYhatIS-self.mY    
+    
+    def forecast_ARIMA(self, iOoS:int ,ddParams = None):
+        """_summary_
+
+        Args:
+            iOoS (int): _description_
+        """
+        self.dForecasters={}
+
+        if self.type=='temporal': #then it is temporal reconciliation            
+            for i,sFreq in enumerate(self.levels):
+                data=self.data.resample(sFreq).sum()
+                dfY = pd.DataFrame(data=data.values , index=data.index , columns=['y'])
+                
+                arima = Forecast_ARIMA(dfData=dfY, dParams = ddParams[i] if ddParams is not None else None)
+                arima.forecast(iOoS=int(time_converter(iOoS,self.levels[-1],sFreq)))
+                self.dForecasters[i]=arima
+                if sFreq==self.levels[0]:
+                    self.mYhat = arima.vYhatOoS.reshape(1,arima.vYhatOoS.shape[0])
+                    self.mYhatIS = arima.vYhatIS.reshape(self.dLevels[sFreq], self.mY.shape[1])
+                else:
+                    mYhat = arima.vYhatOoS.reshape( self.dLevels[sFreq],self.mYhat.shape[1] )
+                    mYhatIS = arima.vYhatIS.reshape( self.dLevels[sFreq],self.mY.shape[1] )
+                
+                    self.mYhatIS = np.vstack((self.mYhatIS,mYhatIS))
+                    self.mYhat=np.vstack((self.mYhat,mYhat)) 
+        elif self.type=='spatial':
+            self.mYhatIS = np.zeros((self.mY.shape[0], self.mY.shape[1]))
+            self.mRes = np.zeros((self.mY.shape[0], self.mY.shape[1]))
+                        
+            n=self.mY.shape[0]
+            m=iOoS
+            self.mYhat=np.zeros((n,m))
+            
+            for i in range(self.mY.shape[0]):
+                dfY = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])   
+                            
+                arima = Forecast_ARIMA(dfData=dfY, dParams = ddParams[i] if ddParams is not None else None)
+                arima.forecast(iOoS=iOoS)
+                self.dForecasters[i]=arima
+                self.mYhat[i] = arima.vYhatOoS
+                self.mYhatIS[i] = arima.vYhatIS                                       
+                        
+        self.mRes=self.mYhatIS-self.mY  
+        
+        
                          
     def reconcile(self , sWeightType: str):
         """
@@ -414,8 +484,6 @@ class Tree:
         self.getMatrixW(sWeightType)      
         self.getMatrixP(sWeightType)            
         self.mYtilde=np.dot(np.dot(self.mS,self.mP),self.mYhat)
-        
-        print('Reconciliation is complete')
     
     def cross_validation(self , dfHolidays, initial, period, horizon , lMethods ):
         """Performs cross_validation and returns matrices required for assesment

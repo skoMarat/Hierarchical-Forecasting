@@ -28,10 +28,7 @@ import logging
 import cmdstanpy
 logging.getLogger('cmdstanpy').setLevel(logging.WARNING)
 from dateutil.relativedelta import relativedelta
-import  skfda
-from skfda.preprocessing.dim_reduction import FPCA
-import fdata
-from fdata import FData
+
 
 
 

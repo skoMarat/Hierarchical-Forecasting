@@ -96,6 +96,10 @@ class Forecast_Prophet:
             
         self.model=None
         self.dfModel=None
+        self.vYhatIS=None
+        self.vYhatOoS=None
+        self.vRes=None
+        
         self.rmse=None
         self.mape=None
         self.var=None
@@ -231,6 +235,7 @@ class Forecast_Prophet:
         
         self.vYhatIS=dfModel.yhat.values[:-self.iOoS]
         self.vYhatOoS=dfModel.yhat.values[-self.iOoS:]
+        self.vRes=self.vYhatIS-self.dfData['y']
         self.model=model
         self.dfModel=dfModel
         
