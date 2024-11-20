@@ -89,6 +89,154 @@ def return_vAverageRelativeMetric(vMetric:np.ndarray, vMetricRelative:np.ndarray
     
     return np.hstack([vAverageRelativeMeanMetric,ARmetric])
 
+
+def diag_mat(rem=[], result=np.empty((0, 0))):
+    """
+    Recursively constructs a block-diagonal matrix by concatenating matrices from a list.
+
+    This function takes a list of matrices and iteratively places them along the diagonal of a larger matrix.
+    Each input matrix is added to the diagonal of the resulting matrix, and the off-diagonal elements
+    are filled with zeros.
+
+    Parameters:
+    -----------
+    rem : list of numpy arrays
+        A list of 2D numpy arrays (matrices) to be placed on the diagonal of the resulting matrix.
+        The matrices are added in the order they appear in the list.
+    
+    result : numpy array, optional, default=np.empty((0, 0))
+        The current state of the result matrix (initially an empty matrix).
+        The matrix is expanded recursively by adding the matrices from `rem` along the diagonal.
+
+    Returns:
+    --------
+    numpy array
+        The resulting block-diagonal matrix with matrices from `rem` placed along the diagonal.
+
+    Example:
+    --------
+    rem = [np.array([[1]]), np.array([[2, 3], [4, 5]])]
+    result = diag_mat(rem)
+    print(result)
+    # Output:
+    # [[1. 0. 0. 0.]
+    #  [0. 2. 3. 0.]
+    #  [0. 4. 5. 0.]
+    #  [0. 0. 0. 0.]]
+    """
+    
+    if not rem:  # Base case: If no matrices are left, return the accumulated result.
+        return result
+
+    m = rem.pop(0)  # Pop the first matrix from the list.
+    
+    # Construct a new matrix with the current `result` and `m` on the diagonal.
+    result = np.block([
+        [result, np.zeros((result.shape[0], m.shape[1]))],  # Add zeros to the right of `result`.
+        [np.zeros((m.shape[0], result.shape[1])), m]  # Add zeros below `result` and place `m` in the bottom-right.
+    ])
+    
+    # Recursively call the function with the remaining matrices.
+    return diag_mat(rem, result)
+
+
+def sort_key(item):
+    none_count = item.count(None)
+    return (-none_count, item)  
+
+def split_matrix(matrix, dLevels: dict):
+    """
+    Splits a matrix into smaller matrices based on row sizes derived from dLevels values.
+
+    Args:
+        matrix (np.ndarray): The input matrix to split.
+        dLevels (dict): Dictionary with keys representing levels and values as the row sizes.
+
+    Returns:
+        list: A list of sub-matrices split based on dLevels values.
+    """
+    splits = []
+    start = 0
+    row_sizes = list(dLevels.values())  # Extract row sizes from dictionary
+    for size in row_sizes:
+        splits.append(matrix[start:start + size, :])  # Slice along rows
+        start += size
+    return splits
+
+def time_converter(value, from_unit, to_unit):
+    """
+    Convert between time units: T, H, D, W, 
+    and M, Q, SA, A.
+    
+    Units:
+    - Higher frequency: 'T', 'H', 'D', 'W'
+    - Lower frequency: 'M', 'Q', 'SA', 'A'
+    """
+    conversion_factors = {
+        # Higher frequencies
+        ('T', 'H'): 1 / 60,
+        ('H', 'T'): 60,
+        ('H', 'D'): 1 / 24,
+        ('D', 'H'): 24,
+        ('D', 'W'): 1 / 7,
+        ('W', 'D'): 7,
+        
+        # Lower frequencies
+        ('M', 'Q'): 1 / 3,
+        ('Q', 'M'): 3,
+        ('M', 'SA'): 1 / 6,
+        ('SA', 'M'): 6,
+        ('M', 'A'): 1 / 12,
+        ('A', 'M'): 12,
+        ('Q', 'SA'): 1 / 2,
+        ('SA', 'Q'): 2,
+        ('Q', 'A'): 1 / 4,
+        ('A', 'Q'): 4,
+        ('SA', 'A'): 1 / 2,
+        ('A', 'SA'): 2,
+    }
+
+    # Check if the conversion is valid
+    if (from_unit, to_unit) in conversion_factors:
+        factor = conversion_factors[(from_unit, to_unit)]
+        return value * factor
+    else:
+        if from_unit==to_unit:
+            return value
+        else:
+            return f"Conversion from {from_unit} to {to_unit} is not supported."   
+
+def subset_data(data,levels,l:list):
+    """
+    subsets data to include only data of a certain leaf
+    leaf_list (list)  size n, [0] is the level 0 while [-1] is the lowest level
+    
+    returns: serried of aggregated values for a given leaf_list
+    """
+    column_mask=(data[levels]==l).any(axis=0)  
+    row_mask=(data[levels]==l).loc[:,column_mask].all(axis=1)
+    
+    srY=data[row_mask].drop(columns=levels).sum(axis=0)
+        
+    return srY
+
+def create_cascading_matrix(list_of_lengths):
+    """
+    Creates a matrix with cascading binary entries. 
+    list_of_lengths: number of 1's in each row
+    number of rows in resulting matrix is equal to number of int in list_of_lengths
+        
+    """
+    total_columns = sum(list_of_lengths)
+    matrix = np.zeros((len(list_of_lengths), total_columns), dtype=int)
+    
+    start_index = 0
+    for i, length in enumerate(list_of_lengths):
+        matrix[i, start_index:start_index + length] = 1
+        start_index += length
+    
+    return matrix   
+
 def getCVResults( h:int, dOutputs ,metric:str , slices: list , iters: int , rolling=True , relative=True):
     """ 
     

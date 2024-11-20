@@ -25,14 +25,16 @@ from pandas import to_datetime
 from prophet import Prophet
 from dateutil.relativedelta import relativedelta
 from leaf import *
+from utils import *
 from forecast_prophet import *
 import copy
+from itertools import chain
 from datetime import datetime
 import pickle
 
 
 class Tree:
-    def __init__(self, data_directory , type: str ):
+    def __init__(self, data:pd.DataFrame , type: str ):
         """ 
         A tree object is a collection of leaf objects. 
         OnlyKPI and date is required for
@@ -56,20 +58,17 @@ class Tree:
              
         """       
         
-        # #reads data
-        self.data=pd.read_pickle(data_directory)
+        #
+        self.data=data
         self.type=type
-        self.mY , self.date_time_index , self.levels, self.list_of_leafs = self.get_mY()
-        
-        self.dLevels={}
-        for i,l in enumerate(self.levels):
-            self.dLevels[self.levels[-i-1]]=len([sublist for sublist in self.list_of_leafs if sublist.count(None) == i]) #70
-        self.dLevels['total']=1
+                                             
+        self.mS , self.levels , self.dLevels , self.list_of_leafs , self.date_time_index=self.get_mS()
+
+        self.mY = self.get_mY()
         
         self.ddParams = None  #forecasting parameters dictionary of dictionaries   
         self.dForecasters = None # dictionary of forecast instances
         
-                   
         self.mP    = None
         self.mW    = None
         self.mYhat = None
@@ -77,39 +76,40 @@ class Tree:
         self.mYtilde = None 
         self.mRes = None    # matrix that stores in sample base forecast errors.
         
-        # Get summattion matrix S                              
-        mS=np.ones((1,next(iter(self.dLevels.values())))) # start with 1 row at the top of matrix s that is always a vector of ones of size equal to # of bottom level series
-        
-        for i,_ in enumerate(self.levels.to_list()):
-            groupByColumns=self.levels.to_list()[:i+1]
-            vBtmLevelSeries=self.data.groupby(groupByColumns).count().iloc[:,0].values
-            mS=np.vstack([mS,self.create_matrix_S(vBtmLevelSeries)])  
-            
-        self.mS = mS 
-
     def get_mY(self):
         """Puts data into a mY according to hierarchical nature
+        for temporal hierarchy, subsets data so that all data values add up
         
         """
-        data=self.data
-        #based on data, find all possible levels and datetime index
-        
-        
-        def subset_data(data,levels,l:list):
-            """
-            subsets data to include only data of a certain leaf
-            leaf_list (list)  size n, [0] is the level 0 while [-1] is the lowest level
-            
-            returns: serried of aggregated values for a given leaf_list
-            """
-            column_mask=(data[levels]==l).any(axis=0)  
-            row_mask=(data[levels]==l).loc[:,column_mask].all(axis=1)
-            
-            srY=data[row_mask].drop(columns=levels).sum(axis=0)
-                
-            return srY  
-        
+        mS=self.mS
+
         if self.type=='spatial':
+            dfData=self.data
+            #create tree data matrix mY
+            mY=np.zeros( (len(self.list_of_leafs), len(self.date_time_index)))
+            for i,leaf_creds in enumerate(self.list_of_leafs):
+                mY[i]=subset_data(dfData, self.levels,leaf_creds).values                                                                   
+        elif self.type=='temporal':
+            if self.levels[-1]=='D': # works only for W and M data currently #TODO
+                start_index = self.data[self.data.index.weekday == 0].index[0]
+                end_index = self.data[self.data.index.weekday==6].index[-1]
+            elif self.levels[-1]=='M':
+                start_index = self.data[self.data.index.month == 1].index[0]
+                end_index = self.data[self.data.index.month==12].index[-1]
+
+            data=self.data[start_index:end_index]
+            
+            n=int(data.shape[0]/mS.shape[1])
+            m=mS.shape[1]
+            mYbottom=data.values.reshape((n,m)).T
+            mY=mS@mYbottom
+            
+            self.data=data
+        return mY 
+    
+    def get_mS(self):
+        if self.type=='spatial':
+            data=self.data
             #TODO change below to accomodate levels and prices
             levels=data.columns[pd.to_datetime(data.columns, errors='coerce').isna()] 
             date_time_index=pd.to_datetime(data.drop(columns=levels).columns)                  
@@ -120,104 +120,62 @@ class Tree:
             for level in levels[::-1]:
                 df[level]=None
                 df=df.drop_duplicates()
-                list_of_leafs.extend(df.values.tolist())
-                
-            def sort_key(item):
-                none_count = item.count(None)
-                return (-none_count, item)       
+                list_of_leafs.extend(df.values.tolist())  
 
             list_of_leafs=sorted(list_of_leafs, key=sort_key)
             
-            #create tree data matrix mY
-            mY=np.zeros( (len(list_of_leafs), len(date_time_index)))
+            dLevels={}
+            for i,l in enumerate(levels):
+                dLevels[levels[-i-1]]=len([sublist for sublist in list_of_leafs if sublist.count(None) == i]) #70
+            dLevels['total']=1
             
-            for i,leaf_creds in enumerate(list_of_leafs):
-                mY[i]=subset_data(data, levels,leaf_creds).values                                                              
-        elif self.type=='temporal':
-        #     #data will be a series not dataframe
-        #     levels=['T','H','D','W','M','Q','A']
-        #     dLevels={'T': 60 , 'H' :24 , 'D': 7 , 'W':1, 'M': 3 , 'Q':4 , 'A': 1}
+            mS=np.ones((1,next(iter(dLevels.values())))) # start with 1 row at the top of matrix s 
+            #that is always a vector of ones of size equal to # of bottom level series
+            for i,_ in enumerate(levels.to_list()):
+                groupByColumns=levels.to_list()[:i+1]
+                vBtmLevelSeries=data.groupby(groupByColumns).count().iloc[:,0].values
+                mS=np.vstack([mS,create_cascading_matrix(vBtmLevelSeries)])  
+        else:
+            #data will be a series not dataframe            
+            levels=['A', 'SA', 'Q', 'M', 'W', 'D', 'H', 'T']
+            dLevels={'A': 1, 'SA': 2 ,'Q': 2*2, 'M': 2*2*3, 'W': 1 , 'D':7 , 'H': 7*24 , 'T': 7*24*60}
             
-        #     start_index = levels.index(self.data.index.inferred_freq) #the bottom frequency, the freq of data
-        #     end_index = 3 if start_index<3 else 6      
-        #     self.levels=levels[start_index:end_index + 1]   
+            sFreqData=self.data.index.inferred_freq
+            end_index = levels.index(sFreqData) #the bottom frequency, the freq of data
+            start_index = 4 if end_index>3 else 0      
             
-        #     #make sure series is summable :  full weeks, full years etc #TODO only works for D W now
-        #     start_index = self.data[self.data.index.weekday == 6].index[0]
-        #     end_index = self.data[self.data.index.weekday==6].index[-1]
-        #     self.data=self.data[start_index:end_index]
-            
-        #     #create and populate mY
-        #     levels=['T','H','D','W','M','Q','A']
-        #     dLevels={'T': 60 , 'H' :24 , 'D': 7 , 'W':1, 'M': 3 , 'Q':4 , 'A': 1}
-
-        #     start_index = levels.index(self.data.index.inferred_freq) #the bottom frequency, the freq of data
-        #     end_index = 3 if start_index<3 else 6      
-        #     levels=levels[start_index:end_index + 1] 
-
-        #     if end_index==3: # works only for W and M data currently
-        #         start_index = self.data[self.data.index.weekday == 0].index[0]
-        #         end_index = self.data[self.data.index.weekday==6].index[-1]
-        #     else:
-        #         start_index = self.data[self.data.index.month == 1].index[0]
-        #         end_index = self.data[self.data.index.month==12].index[-1]
-
-        #     df=self.data[start_index:end_index]
-
-        #     #create and populate mY
-        #     aUnits=np.array([])
-        #     n=1
-        #     for sFreq in reversed(levels):
-        #         n=dLevels[sFreq]*n
-        #         aUnits=np.append(aUnits,int(n))
-        #     self.aUnits=aUnits[::-1].astype(int)    
-        #     n=int(aUnits.sum())
-        #     m=df.resample(levels[-1]).sum().shape[0]
-
-
-        #     mY=df.values.reshape( ( m , aUnits[0] )).T
-        #     mS=self.create_matrix([aUnits[0]])
-        #     for i,sFreq in enumerate(levels[1:]):
-        #         df=df.resample(sFreq).sum()
-        #         n = aUnits[i+1]
-        #         mY_=df.values.reshape(( m ,n)).T 
-        #         mY=np.vstack((mY_, mY))
-
-        #         vBtmLevelSeries=np.full(aUnits[-i-2],int(aUnits[0]/aUnits[-i-2]))
-        #         mS_=self.create_matrix(vBtmLevelSeries)
-        #         mS=np.vstack(( mS, mS_ ))
-            return
+            levels=levels[start_index:end_index + 1] 
+            dLevels={key: dLevels[key] for key in levels if key in dLevels.copy()}
+                       
+            mS=np.ones(dLevels[sFreqData],dtype=int) #starts from top level
+            print(levels)
         
-        return mY, date_time_index , levels, list_of_leafs  
-
-    def create_matrix_S(self, list_of_lengths):
-        """
-        Creates a matrix with cascading binary entries. 
-        list_of_lengths: number of 1's in each row
-        number of rows in resulting matrix is equal to number of int in list_of_lengths
-         
-        """
-        total_columns = sum(list_of_lengths)
-        matrix = np.zeros((len(list_of_lengths), total_columns), dtype=int)
-        
-        start_index = 0
-        for i, length in enumerate(list_of_lengths):
-            matrix[i, start_index:start_index + length] = 1
-            start_index += length
-        
-        return matrix     
+            for i,sFreq in enumerate(levels[1:]):
+                vBtmLevelSeries=np.full(dLevels[sFreq],int(dLevels[sFreqData]/dLevels[sFreq]))
+                mS_=create_cascading_matrix(vBtmLevelSeries)
+                mS=np.vstack(( mS, mS_ ))
+                
+            list_of_leafs=[]
+            for i,sFreq in enumerate(levels):
+                list_of_leafs.append([str(levels[i])+"_"+str(u) for u in np.arange(1,dLevels[sFreq]+1)])
+            list_of_leafs = list(chain.from_iterable(list_of_leafs))
+            
+            date_time_index=None  # will be passed in getmY      
+        return mS , levels, dLevels, list_of_leafs , date_time_index
                 
     def getMatrixW(self , sWeightType:str):
         """
         Purpose:
         create the weights matrix
         
+        MINT_method means that mW is a proxy for Sigma^-{inv}
+        
         Outputs:
         mW:            matrix of weights
         """
 
         mRes=self.mRes.copy()
-        mW = np.eye(mRes.shape[0])
+        # mW = np.eye(mRes.shape[0])
         # vNonNanRows = np.setdiff1d(np.arange(0,mRes.shape[0]),  np.unique(np.argwhere(np.isnan(mRes))[:,0]))
         # mRes = mRes[vNonNanRows,:]
         n=mRes.shape[0]
@@ -229,10 +187,28 @@ class Tree:
         
         if sWeightType == 'ols':  
             mW = np.eye(n) 
-        elif sWeightType == 'mint_ss':  #structural scaling
+        elif sWeightType == 'wls':
+            mW=np.diag(np.hstack((np.ones(n-70),np.zeros(70)))) 
+        elif sWeightType== 'mint_svar': #variance scaling
+            vW=np.empty(0)
+            for l,level in enumerate(self.levels):
+                fVar=split_matrix(mRes_centered,self.dLevels)[l].var()
+                vW=np.vstack((vW,np.full(self.dLevels[level],fVar)))        
+            mW=np.linalg.inv(np.diag(vW))       
+        elif sWeightType== 'mint_acov': #auto covariance scaling
+            for l,level in enumerate(self.levels):
+                mRes_centered_level=split_matrix(mRes_centered,self.dLevels)[l]
+                mSigma_level=(mRes_centered_level@mRes_centered_level.T)/(m-1)
+                
+                if l==0:
+                    mW=diag_mat([mSigma_level])
+                else:
+                    mW=diag_mat([mW,mSigma_level])
+            mW=np.linalg.inv(mW)       
+        elif sWeightType == 'mint_struc':  #structural scaling
             mW=np.diag(np.sum(self.mS, axis=1))
             mW=np.linalg.inv(mW)   
-        elif sWeightType == 'mint_diag': #wls
+        elif sWeightType == 'mint_diag' or sWeightType == 'mint_hvar': #variance scaling  or wls
             mW=np.diag(np.diag(mSigma))
             mW=np.linalg.inv(mW)      
         elif sWeightType == 'mint_sample':  # full
@@ -376,24 +352,40 @@ class Tree:
         tune (bool)  : tunes if true
 
         """ 
-        self.mYhatIS = np.zeros((self.mY.shape[0], self.mY.shape[1]))
-        self.mRes = np.zeros((self.mY.shape[0], self.mY.shape[1]))
+
         self.dForecasters={}
 
-        if self.type=='temporal': #then it is temporal reconciliation
-            print('No temporal code available at the moment')
-            # vYhat=np.array([])
-            # multiple=int(iOoS/self.aUnits[0])
-            # for i,sFreq in enumerate(self.levels):  # starts from bottom
-            #     dfData=self.data.resample(sFreq).sum()
-            #     if sForecMeth=="Prophet":
-            #         pht=Forecast_Prophet(dfData=dfData, iOoS=(self.aUnits*multiple)[i])
-            #         vYhat_ = pht.forecast(holidays=holidays, changepoints=changepoints).yhat.values
-            #     vYhat=np.concatenate((vYhat_, vYhat)) 
-            # self.mYhat=vYhat    
-             
-        else:
-            self.mYhat=np.zeros((len(self.list_of_leafs),iOoS))
+        if self.type=='temporal': #then it is temporal reconciliation            
+            for i,sFreq in enumerate(self.levels):
+                data=self.data.resample(sFreq).sum()
+                dfY = pd.DataFrame(data=data.values , index=data.index , columns=['y'])
+                
+                if mX is not None:  #TODO
+                    print('No mX')
+                else:
+                    dfX=None
+                    
+                pht = Forecast_Prophet(dfData=dfY, dfX=dfX,
+                                        dfHolidays=dfHolidays, dfChangepoints=dfChangepoints,
+                                        dParams = ddParams[i] if ddParams is not None else None)
+                pht.forecast(iOoS=int(time_converter(iOoS,self.levels[-1],sFreq)))
+                self.dForecasters[i]=pht
+                if sFreq==self.levels[0]:
+                    self.mYhat = pht.vYhatOoS.reshape(1,pht.vYhatOoS.shape[0])
+                    self.mYhatIS = pht.vYhatIS.reshape(self.dLevels[sFreq], self.mY.shape[1])
+                else:
+                    mYhat = pht.vYhatOoS.reshape( self.dLevels[sFreq],self.mYhat.shape[1] )
+                    mYhatIS = pht.vYhatIS.reshape( self.dLevels[sFreq],self.mY.shape[1] )
+                
+                    self.mYhatIS = np.vstack((self.mYhatIS,mYhatIS))
+                    self.mYhat=np.vstack((self.mYhat,mYhat)) 
+        elif self.type=='spatial':
+            self.mYhatIS = np.zeros((self.mY.shape[0], self.mY.shape[1]))
+            self.mRes = np.zeros((self.mY.shape[0], self.mY.shape[1]))
+                        
+            n=self.mY.shape[0]
+            m=iOoS
+            self.mYhat=np.zeros((n,m))
             
             for i in range(self.mY.shape[0]):
                 dfY = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])   
@@ -405,12 +397,9 @@ class Tree:
                 else:
                     dfX=None
                             
-                pht = Forecast_Prophet(dfData=dfY, 
-                                        dfX=dfX,
-                                        dfHolidays=dfHolidays,
-                                        dfChangepoints=dfChangepoints,
-                                        dParams = ddParams[i] if ddParams is not None else None
-                                        )
+                pht = Forecast_Prophet(dfData=dfY, dfX=dfX,
+                                        dfHolidays=dfHolidays,dfChangepoints=dfChangepoints,
+                                        dParams = ddParams[i] if ddParams is not None else None)
                 pht.forecast(iOoS=iOoS)
                 self.dForecasters[i]=pht
                 self.mYhat[i] = pht.vYhatOoS
@@ -467,6 +456,7 @@ class Tree:
                 break    
             
             tree_iter.forecast_Prophet(iOoS=horizon, dfHolidays=dfHolidays, ddParams=self.ddParams)
+            tree_iter.forecast_AR()
             
             for sWeightType in lMethods:            
                 tree_iter.reconcile(sWeightType)  
