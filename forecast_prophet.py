@@ -296,10 +296,12 @@ class Forecast_Prophet:
         
         # Plot errors
         plt.figure(figsize=(12, 6))
-        if inSample==True:
-            plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
-        else:
-            plt.plot(srYhatIS.index[-self.iOoS*2:] , srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residual', color='red')
+        # if inSample==True:
+        #     plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
+        # else:
+        #     plt.plot(srYhatIS.index[-self.iOoS*2:] , srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residual', color='red')
+        plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
+
         plt.xlabel('Date')
         plt.ylabel('Value')
         plt.title('Residuals time-series')
@@ -308,10 +310,11 @@ class Forecast_Prophet:
         plt.show()
         
         plt.figure(figsize=(12, 6))
-        if inSample==True:
-            plt.hist( srYhatIS - self.dfData.y, label='Residuals')
-        else:
-            plt.hist( srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residuals')
+        # if inSample==True:
+        #     plt.hist( srYhatIS - self.dfData.y, label='Residuals')
+        # else:
+        #     plt.hist( srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residuals')
+        plt.hist( srYhatIS - self.dfData.y, label='Residuals')
         plt.xlabel('Values')
         plt.ylabel('Frequency')
         plt.title('Residuals histogram')

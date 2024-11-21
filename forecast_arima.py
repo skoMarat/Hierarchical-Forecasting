@@ -37,18 +37,20 @@ class Forecast_ARIMA:
 
         
         """
-        self.dfData=dfData    # data , [0] to be forecasted, index must be datetime index
-        self.vY=dfData.values()
-        self.date_time_index=dfData.index()
-        self.dParams=dParams
+        self.dfData = dfData    # data , [0] to be forecasted, index must be datetime index
+        self.vY = dfData.values
+        self.date_time_index = dfData.index
+        self.sFreq = dfData.index.inferred_freq
+        self.dParams = dParams
                 
-        self.vYhatOoS=None
-        self.vRes=None
+        self.vYhatOoS = None
+        self.iOoS     = None
+        self.vRes     = None
 
-        self.model=None
-        self.rmse=None
-        self.mape=None
-        self.var=None      
+        self.model = None 
+        self.rmse  = None
+        self.mape  = None
+        self.var   = None      
         
         
     def tune(self):
@@ -69,12 +71,17 @@ class Forecast_ARIMA:
         best_order = None 
         best_model = None  
         
-        sFreq=self.date_time_index.inferred_freq
-        if sFreq=='D':
-            p_range=7 , d_range=2 , q_range=7 
-        elif sFreq=='W':
-            p_range=7 , d_range=2 , q_range=7
-
+        if self.sFreq=='D':
+            p_range=7 
+            d_range=2
+            q_range=7 
+        elif self.sFreq=='W' or self.sFreq=='W-SUN':
+            p_range=7
+            d_range=2
+            q_range=7
+        else:
+            print('unspecified freq')
+   
         # Grid search over p, d, and q
         for p in range(0,p_range):
             for d in range(0,d_range+1):
@@ -119,18 +126,24 @@ class Forecast_ARIMA:
         Returns:
             _type_: _description_
         """
+        self.iOoS = iOoS
         
+        p=self.dParams['p']
+        d=self.dParams['d']
+        q=self.dParams['q']
+        
+        self.model = ARIMA(self.vY, order=(p, d, q)).fit()
         forecast=self.model.get_forecast(steps=iOoS).predicted_mean
         fit=self.model.fittedvalues
         
-        self.vYhatIS=fit.values[iOoS:]
-        self.vYhatOoS=forecast.values
-        self.vRes=self.vYhatIS-self.vY[iOoS:]
+        self.vYhatIS=fit
+        self.vYhatOoS=forecast
+        self.vRes=self.vYhatIS-self.vY
         
         #populate performance metrics
-        self.rmse=np.sqrt(np.mean((self.vYhatIS-self.dfData.y )** 2))
-        self.mape=np.mean(np.abs((self.dfData.y[self.dfData.y != 0] - self.vYhatIS[self.dfData.y != 0]) / self.dfData.y[self.dfData.y != 0])) * 100
-        self.var=(self.vYhatIS-self.dfData.y ).var()
+        self.rmse=np.sqrt(np.mean((self.vYhatIS-self.vY )** 2))
+        # self.mape=np.mean(np.abs((self.vY[self.vY != 0][iOoS:] - self.vYhatIS[self.vY != 0]) / self.vY[self.vY != 0][iOoS:])) * 100
+        self.var=(self.vYhatIS-self.vY ).var()
     
     
         
@@ -184,10 +197,12 @@ class Forecast_ARIMA:
         
         # Plot errors
         plt.figure(figsize=(12, 6))
-        if inSample==True:
-            plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
-        else:
-            plt.plot(srYhatIS.index[-self.iOoS*2:] , srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residual', color='red')
+        # if inSample==True:
+        #     plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
+        # else:
+        #     plt.plot(srYhatIS.index[-self.iOoS*2:] , srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residual', color='red')
+        plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
+
         plt.xlabel('Date')
         plt.ylabel('Value')
         plt.title('Residuals time-series')
@@ -196,10 +211,12 @@ class Forecast_ARIMA:
         plt.show()
         
         plt.figure(figsize=(12, 6))
-        if inSample==True:
-            plt.hist( srYhatIS - self.dfData.y, label='Residuals')
-        else:
-            plt.hist( srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residuals')
+        # if inSample==True:
+        #     plt.hist( srYhatIS - self.dfData.y, label='Residuals')
+        # else:
+        #     plt.hist( srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residuals')
+        plt.hist( srYhatIS - self.dfData.y, label='Residuals')
+
         plt.xlabel('Values')
         plt.ylabel('Frequency')
         plt.title('Residuals histogram')
@@ -214,12 +231,6 @@ class Forecast_ARIMA:
         plt.title('Autocorrelation Function (ACF) of Residuals') 
         plt.ylabel('Autocorrelation')
         plt.show()     
-        
-        
-        fig = self.model.plot_components(self.dfModel)
-        fig
-            
-
 
     
 
