@@ -41,10 +41,15 @@ class Forecast_Prophet:
         holidays (list)      : list of known holidays or outliers
         changepoints (list)  : list of trend chagepoints
         params (dict)        : dictionary of parameters to be used
+                                   changpoint_prior_scale: flexibility of trend, small values leads to underfit of trend
+                                   seasonality_prior_scale: flexibility of seasons, large value allows to fit large fluctuations
+                                   holidays_prior_scale : flexibility of holidays, higher values offer no regularization
+                                   seasonality_mode : if the magniture of seasonal fluctuations grows with magnitude of the time series then multiplicative
         
         """
         self.dfData=dfData    # data , [0] to be forecasted, index must be datetime index
         self.dfX=dfX 
+        self.transform_type=None
         
         if dfHolidays is not None: # then there are holidays to incorporate
             holiday_dfs=[]
@@ -75,7 +80,6 @@ class Forecast_Prophet:
                            
         
         # number of OoS forecast to generate in the same granularity as srY
-        self.srYhat=None     # forecasted series TODO
         self.sFreq=self.dfData.index.inferred_freq
         
         if dParams is None:
@@ -103,9 +107,34 @@ class Forecast_Prophet:
         self.rmse=None
         self.mape=None
         self.var=None
-        
-        
-        
+     
+    def retransform(self):
+        """
+        Transform back to original scale
+        Perform after tuning and forecasting
+        """
+        if self.transform_type=='log':
+            self.dfData=np.exp(self.dfData)
+            self.vYhatIS=np.exp(self.vYhatIS)
+            self.vYhatOoS=np.exp(self.vYhatOoS)
+            self.vRes=self.vYhatIS-self.dfData['y']
+            
+            #populate performance metrics
+            self.rmse=np.sqrt(np.mean((self.vYhatIS-self.dfData.y )** 2))
+            self.mape=np.mean(np.abs((self.dfData.y[self.dfData.y != 0] - self.vYhatIS[self.dfData.y != 0]) / self.dfData.y[self.dfData.y != 0])) * 100
+            self.var=(self.vYhatIS-self.dfData.y ).var()
+            
+    def transform(self, type:str):
+        """
+        Transforms the data 
+        Apply before doing any tuning or forecasting
+        """    
+        self.transform_type=type
+        if type=='log':
+            self.dfData=np.log(self.dfData)    # data , [0] to be forecasted, index must be datetime index
+            if self.dfX is not None:
+                self.dfX=np.log(self.dfX) 
+            
         
     def tune(self, random_size:int , initial:int, period:int, horizon:int , metric:str , parallel='processes' ,plot=False):
         """
@@ -143,8 +172,8 @@ class Forecast_Prophet:
             'seasonality_prior_scale': [0.01, 0.1, 1.0, 5 , 10.0],
             'holidays_prior_scale': [0.01 , 0.1, 1 , 5 , 10.0] , 
             'seasonality_mode': ['additive',  'multiplicative'],
-            'weekly_seasonality': [3,  7 , 9 ],
-            'yearly_seasonality': [5,  10 , 15 , 20]
+            'weekly_seasonality': [ 2,  3,  5  ],
+            'yearly_seasonality': [ 10 , 15 , 20 , 25 ]
         }
 
         # Generate all combinations of parameters
@@ -188,13 +217,10 @@ class Forecast_Prophet:
         print('Tuning has been terminated succesfully')
 
         
-    def forecast(self, iOoS:int, scaling="absmax") :       # TODO
+    def forecast(self, iOoS:int, scaling="absmax") :       
         """
-        Fit Prophet model for daily (or monthly data? TODO)
+        Fit Prophet model for daily (and weekly data? TODO)
         regressor self.x must be known also for OoS forecast part. Use other method otherwise
-    
-    
-        
         
         returns nothing , populates self. objects that are required for forecasting
         dfModel.vYhat is the fitted and predicted vYhat of len(self.iOoS + len(dfData))
@@ -328,7 +354,13 @@ class Forecast_Prophet:
         plt.xlabel('Lags')
         plt.title('Autocorrelation Function (ACF) of Residuals') 
         plt.ylabel('Autocorrelation')
-        plt.show()     
+        plt.show()    
+        
+        plot_pacf(srYhatIS - self.dfData.y, lags=31)  
+        plt.xlabel('Lags')
+        plt.title('Partial Autocorrelation Function (PACF) of Residuals') 
+        plt.ylabel('Partial Autocorrelation')
+        plt.show()  
         
         
         fig = self.model.plot_components(self.dfModel)
