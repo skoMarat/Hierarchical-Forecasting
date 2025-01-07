@@ -29,14 +29,18 @@ from utils import *
 
 import logging
 logging.getLogger('cmdstanpy').addHandler(logging.NullHandler())
- 
-       
+        
 
-def prepare_weights():
+def prepare_weights(path:str):
+    """
+    saves weights to data folder
+    path (str) : location of data 
+    
+    """
     #reads data that was downloaded from Kaggle into desktop as a csv file
-    dfValidation=pd.read_pkl("c:\\Users\\31683\\Desktop\\sales_train_validation.csv") 
-    dfCalendar=pd.read_pkl(os.getcwd()+f"\\data\\M5\\calendar.csv")
-    dfPrices=pd.read_pkl(os.getcwd()+f"\\data\\M5\\sell_prices.csv")
+    dfValidation=pd.read_pkl(path+"\\sales_train_validation.pkl") 
+    dfCalendar=pd.read_csv(path+"\\calendar.csv")
+    dfPrices=pd.read_pkl(path+"\\sell_prices.pkl")
     
     df=pd.concat([dfValidation[['store_id','item_id']],dfValidation.iloc[:,-28:]], axis=1)
     dfDW=dfCalendar[dfCalendar.d.isin(df.columns[1:])][['d','wm_yr_wk']]
@@ -87,16 +91,18 @@ def prepare_weights():
     for i,leaf_creds in enumerate(list_of_leafs):
         vW[i]=subset_data(dfWeights,levels,leaf_creds).values
     
-    np.savetxt(os.getcwd()+f"\\data\\M5\\weights.txt", vW, fmt='%d', delimiter=' ')  
+    np.savetxt(path+"\\weights.txt", vW, fmt='%d', delimiter=' ')  
 
-def prepare_prices():
+def prepare_prices(path):
     """
-    Method unique to Wallmart data, disaggregates sell_prices.csv into lowest levels and
+    Method unique to Wallmart data, disaggregates sell_prices.pkl into lowest levels and
     creates a time series dataframe similar (or same) to sales_train_validation.csv
     further to be fed into get_mY method
+    
+    saves to data
     """
-    dfPrices=pd.read_csv(os.getcwd()+f"\\data\\M5\\sell_prices.csv")
-    dfCalendar=pd.read_csv(os.getcwd()+f"\\data\\M5\\calendar.csv")
+    dfPrices=pd.read_pkl(path+"\\sell_prices.csv")
+    dfCalendar=pd.read_csv(path+"\\calendar.csv")
     dfPrices=dfPrices.pivot(index=['store_id','item_id'],columns='wm_yr_wk', values='sell_price').reset_index()
     df=dfPrices.iloc[:,:2]
     for week_number in dfPrices.columns:
@@ -111,7 +117,7 @@ def prepare_prices():
     data_cols = df.loc[:, ~df.columns.isin(['state_id', 'store_id', 'cat_id', 'dept_id', 'item_id'])]
     df=pd.concat([hierarchy_cols, data_cols], axis=1)
     
-    df.to_csv(os.getcwd()+f"\\data\\M5\\prices_train_val_eval.csv", index=False)
+    df.to_pickle(path+f"\\data\\M5\\prices_train_val_eval.pkl", index=False)
 
 def get_mX(path):
     """Puts price data into a mX according to hierarchical structure, propogates up the structure using mean    
@@ -188,9 +194,9 @@ def main():
     """
     path='c:\\Users\\31683\\Desktop\\data\\M5'
     Y_path=path+f"\\sales_train_validation.pkl"  # to data file  
-    prepare_prices()
+    prepare_prices(path)
     X_path=os.getcwd()+f"\\prices_train_val_eval.pkl"  # to data file
-    prepare_weights()
+    prepare_weights(path)
     
     ####################################
     weight_type = "diag"

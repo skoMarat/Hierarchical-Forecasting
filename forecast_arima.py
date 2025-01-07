@@ -75,10 +75,10 @@ class Forecast_ARIMA:
             p_range=7 
             d_range=2
             q_range=7 
-        elif self.sFreq=='W' or self.sFreq=='W-SUN':
-            p_range=7
+        elif self.sFreq=='W':
+            p_range=5
             d_range=2
-            q_range=7
+            q_range=5
         else:
             print('unspecified freq')
    
@@ -106,6 +106,37 @@ class Forecast_ARIMA:
         else:
             print('No valid model found. Please check your input ranges or data.')
 
+
+    def transform(self, sType:str):
+        """
+        Transforms the data 
+        Apply before doing any tuning or forecasting
+        """    
+        self.sTransform=sType
+        
+        if self.sTransform=='log':
+            self.dfData=np.log(self.dfData + 1e-6)
+            if self.dfX is not None:
+                self.dfX=np.log(self.dfX + 1e-6) 
+                
+    def retransform(self):
+        """
+        Transform back to original scale
+        Perform after tuning and forecasting
+        """
+        if self.sTransform=='log':
+            self.dfData=np.exp(self.dfData)
+            self.vYhatIS=np.exp(self.vYhatIS)
+            self.vYhatOoS=np.exp(self.vYhatOoS)
+            # self.vRes=self.vYhatIS-self.dfData['y'].values
+            
+            #populate performance metrics
+            self.rmse=np.sqrt(np.median((self.vYhatIS-self.dfData.y )** 2))
+            self.mape=np.median(np.abs((self.dfData.y[self.dfData.y != 0] - self.vYhatIS[self.dfData.y != 0]) / self.dfData.y[self.dfData.y != 0])) * 100
+            self.var=(self.vYhatIS-self.dfData.y ).var()
+        else:
+            return
+        
         
     def perform_ADF(self):
         """
@@ -145,9 +176,6 @@ class Forecast_ARIMA:
         # self.mape=np.mean(np.abs((self.vY[self.vY != 0][iOoS:] - self.vYhatIS[self.vY != 0]) / self.vY[self.vY != 0][iOoS:])) * 100
         self.var=(self.vYhatIS-self.vY ).var()
     
-    
-        
-        
     def plot_prediction(self,inSample=True):
         """
         Plots prediction and data, also insample prediction if bool=True 
@@ -158,7 +186,7 @@ class Forecast_ARIMA:
             start = self.dfData.index[-1] + pd.DateOffset(months=1)
         elif self.sFreq == 'D':
             start = self.dfData.index[-1] + pd.DateOffset(days=1)
-        elif self.sFreq == 'W' or self.sFreq == 'W-SUN' :
+        elif self.sFreq == 'W' :
             start = self.dfData.index[-1] + pd.DateOffset(weeks=1)
         elif self.sFreq == 'H':
             start = self.dfData.index[-1] + pd.DateOffset(hours=1)
@@ -170,8 +198,8 @@ class Forecast_ARIMA:
             raise ValueError(f"Unsupported frequency: {self.sFreq}")
         periods=self.iOoS
         srYhatOoS=pd.Series(self.vYhatOoS,index=pd.date_range(start=start,periods=periods,freq=self.sFreq) )          
-        plt.figure(figsize=(12, 6))
         
+        plt.figure(figsize=(12, 6))
         if inSample==True:
             # Plot dfData
             plt.plot(self.dfData.index, self.dfData, label='Actual Data', color='green',linestyle='', marker='o',markersize=4)
@@ -193,30 +221,26 @@ class Forecast_ARIMA:
         plt.title('In-Sample, and Out-of-Sample Forecasts')
         plt.legend()
         plt.grid(True)
-        plt.show()
+        plt.show()      
         
+        fig = self.model.plot_components(self.dfModel)
+        fig
+            
+    def residual_diagnostic(self):
+        """
+        Plots residual diagnostics 
+        """    
         # Plot errors
         plt.figure(figsize=(12, 6))
-        # if inSample==True:
-        #     plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
-        # else:
-        #     plt.plot(srYhatIS.index[-self.iOoS*2:] , srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residual', color='red')
-        plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
-
+        plt.plot(self.dfData.index , self.vRes, label='Residual', color='red')
         plt.xlabel('Date')
         plt.ylabel('Value')
         plt.title('Residuals time-series')
         plt.legend()
         plt.grid(True)
-        plt.show()
+        plt.show() 
         
-        plt.figure(figsize=(12, 6))
-        # if inSample==True:
-        #     plt.hist( srYhatIS - self.dfData.y, label='Residuals')
-        # else:
-        #     plt.hist( srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residuals')
-        plt.hist( srYhatIS - self.dfData.y, label='Residuals')
-
+        plt.hist( self.vRes, label='Residuals')
         plt.xlabel('Values')
         plt.ylabel('Frequency')
         plt.title('Residuals histogram')
@@ -224,14 +248,27 @@ class Forecast_ARIMA:
         plt.grid(True)
         plt.show()
         
-        
+        plt.figure(figsize=(12, 6))
+        probplot(self.vRes, dist="norm", plot=plt)
+        plt.title('Residuals QQ Plot')
+        plt.grid(True)
+        plt.show()
+                
         #residual autocorrelation
-        plot_acf(srYhatIS - self.dfData.y, lags=31)  
+        plot_acf(self.vRes, lags=31)  
         plt.xlabel('Lags')
         plt.title('Autocorrelation Function (ACF) of Residuals') 
         plt.ylabel('Autocorrelation')
-        plt.show()     
+        plt.show()    
+        
+        plot_pacf(self.vRes, lags=31)  
+        plt.xlabel('Lags')
+        plt.title('Partial Autocorrelation Function (PACF) of Residuals') 
+        plt.ylabel('Partial Autocorrelation')
+        plt.show()  
 
+
+    
     
 
 

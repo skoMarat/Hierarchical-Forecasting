@@ -29,13 +29,14 @@ from utils import *
 from forecast_prophet import *
 from forecast_arima import *
 import copy
+from collections import OrderedDict
 from itertools import chain
 from datetime import datetime
 import pickle
 
 
 class Tree:
-    def __init__(self, data:pd.DataFrame , type: str ):
+    def __init__(self, dfData:pd.DataFrame , sType: str , iLeaf=None):
         """ 
         A tree object is a collection of leaf objects. 
         OnlyKPI and date is required for
@@ -54,22 +55,24 @@ class Tree:
              
         """       
         
-        self.type   = type
-        self.dfData = data
+        self.sType     = sType
+        self.iLeaf     = iLeaf  #None if spatial m if temporal , then Tree is a leaf of a spatial Tree
+        self.dfData    = dfData
+        
                                              
-        self.mS , self.levels , self.dLevels , self.list_of_leafs , self.date_time_index=self.get_mS()
+        self.mS , self.levels , self.dLevels , self.list_of_leafs , self.date_time_index , self.sFreqData = self.get_mS()
 
         self.mY = self.get_mY()
-        
-        self.ddParams     = None  #forecasting parameters dictionary of dictionaries   
+       
         self.dForecasters = None # dictionary of forecast instances
         
-        self.mP      = None
-        self.mW      = None
-        self.mYhat   = None
-        self.mYhatIS = None
-        self.mYtilde = None 
-        self.mRes    = None    # matrix that stores in sample base forecast errors.
+        self.mP        = None
+        self.mW        = None
+        self.mYhat     = None
+        self.mYhatIS   = None
+        self.mYtilde   = None 
+        self.mYtildeIS = None
+        self.mRes      = None    # matrix that stores in sample base forecast errors.
         
     def get_mY(self):
         """Puts data into a mY according to hierarchical nature
@@ -78,13 +81,13 @@ class Tree:
         """
         mS=self.mS
 
-        if self.type=='spatial':
-            dfData=self.dfData
+        if self.sType=='spatial':
+            df_data=self.dfData
             #create tree data matrix mY
             mY=np.zeros( (len(self.list_of_leafs), len(self.date_time_index)))
             for i,leaf_creds in enumerate(self.list_of_leafs):
-                mY[i]=subset_data(dfData, self.levels,leaf_creds).values                                                                   
-        elif self.type=='temporal':
+                mY[i]=subset_data(df_data, self.levels,leaf_creds).values                                                                   
+        elif self.sType=='temporal':
             if self.levels[-1]=='D': # works only for W and M data currently #TODO
                 start_index = self.dfData[self.dfData.index.weekday == 0].index[0]
                 end_index = self.dfData[self.dfData.index.weekday==6].index[-1]
@@ -92,24 +95,26 @@ class Tree:
                 start_index = self.dfData[self.dfData.index.month == 1].index[0]
                 end_index = self.dfData[self.dfData.index.month==12].index[-1]
 
-            dfData=self.dfData[start_index:end_index]
+            df_data=self.dfData[start_index:end_index]
             
-            n=int(dfData.shape[0]/mS.shape[1])
+            n=int(df_data.shape[0]/mS.shape[1])
             m=mS.shape[1]
-            mYbottom=dfData.values.reshape((n,m)).T
+            mYbottom=df_data.values.reshape((n,m)).T
             mY=mS@mYbottom
             
-            self.dfData=dfData
+            self.dfData=df_data
+            self.date_time_index=self.dfData.index
         return mY 
     
     def get_mS(self):
-        if self.type=='spatial':
-            dfData = self.dfData
+        if self.sType=='spatial':
+            df_data = self.dfData
             #TODO change below to accomodate levels and prices
-            levels = dfData.columns[pd.to_datetime(dfData.columns, errors='coerce').isna()] 
-            date_time_index = pd.to_datetime(dfData.drop(columns=levels).columns)                  
+            levels = df_data.columns[pd.to_datetime(df_data.columns, errors='coerce').isna()] 
+            date_time_index = pd.to_datetime(df_data.drop(columns=levels).columns)  
+            sFreqData=date_time_index.inferred_freq                
             #create a hierarchy list
-            df = dfData[levels]
+            df = df_data[levels]
             list_of_leafs = df.values.tolist()  
             
             for level in levels[::-1]:
@@ -123,14 +128,16 @@ class Tree:
             for i,l in enumerate(levels):
                 dLevels[levels[-i-1]]=len([sublist for sublist in list_of_leafs if sublist.count(None) == i]) #70
             dLevels['total']=1
-            
-            mS=np.ones((1,next(iter(dLevels.values())))) # start with 1 row at the top of matrix s 
+            dLevels = OrderedDict(reversed(list(dLevels.items())))
+
+            mS=np.ones((1,dLevels[levels[-1]])) # start with 1 row at the top of matrix s 
             #that is always a vector of ones of size equal to # of bottom level series
             for i,_ in enumerate(levels.to_list()):
                 groupByColumns=levels.to_list()[:i+1]
-                vBtmLevelSeries=dfData.groupby(groupByColumns).count().iloc[:,0].values
-                mS=np.vstack([mS,create_cascading_matrix(vBtmLevelSeries)])  
-        else:
+                vBtmLevelSeries=df_data.groupby(groupByColumns).count().iloc[:,0].values
+                mS=np.vstack([mS,create_cascading_matrix(vBtmLevelSeries)]) 
+    
+        elif self.sType=='temporal':
             #data will be a series not dataframe            
             levels=['A', 'SA', 'Q', 'M', 'W', 'D', 'H', 'T']
             dLevels={'A': 1, 'SA': 2 ,'Q': 2*2, 'M': 2*2*3, 'W': 1 , 'D':7 , 'H': 7*24 , 'T': 7*24*60}
@@ -155,7 +162,7 @@ class Tree:
             list_of_leafs = list(chain.from_iterable(list_of_leafs))
             
             date_time_index=None  # will be passed in getmY      
-        return mS , levels, dLevels, list_of_leafs , date_time_index
+        return mS , levels, dLevels, list_of_leafs , date_time_index , sFreqData
                 
     def getMatrixW(self , sWeightType:str):
         """
@@ -169,27 +176,30 @@ class Tree:
         """
 
         mRes=self.mRes.copy()
-        # mW = np.eye(mRes.shape[0])
+        mW = np.eye(mRes.shape[0])
         # vNonNanRows = np.setdiff1d(np.arange(0,mRes.shape[0]),  np.unique(np.argwhere(np.isnan(mRes))[:,0]))
         # mRes = mRes[vNonNanRows,:]
         n=mRes.shape[0]
         m=mRes.shape[1]
         # mSigma = (mRes@mRes.T)/m
-        
+                
         mRes_centered = mRes - np.mean(mRes, axis=1).reshape(n,1)
         mSigma = (mRes_centered@mRes_centered.T)/(m-1)
         
         if sWeightType == 'ols':  
             mW = np.eye(n) 
         elif sWeightType == 'wls':
-            mW=np.diag(np.hstack((np.ones(n-70),np.zeros(70)))) 
-        elif sWeightType== 'mint_svar': #variance scaling
+            vW=np.loadtxt("c:\\Users\\31683\\Desktop\\data\\M5\\weights.txt")
+            vW=vW[:self.mY.shape[0]]
+            vW=vW/vW[0]
+            mW=np.diag(vW) 
+        elif sWeightType== 'wls_svar': #variance scaling
             vW=np.empty(0)
             for l,level in enumerate(self.levels):
                 fVar=split_matrix(mRes_centered,self.dLevels)[l].var()
-                vW=np.vstack((vW,np.full(self.dLevels[level],fVar)))        
-            mW=np.linalg.inv(np.diag(vW))       
-        elif sWeightType== 'mint_acov': #auto covariance scaling
+                vW=np.concatenate((vW,np.full(self.dLevels[level],fVar)))        
+            mW=np.diag(vW)
+        elif sWeightType== 'wls_acov': #auto covariance scaling
             for l,level in enumerate(self.levels):
                 mRes_centered_level=split_matrix(mRes_centered,self.dLevels)[l]
                 mSigma_level=(mRes_centered_level@mRes_centered_level.T)/(m-1)
@@ -197,14 +207,15 @@ class Tree:
                 if l==0:
                     mW=diag_mat([mSigma_level])
                 else:
-                    mW=diag_mat([mW,mSigma_level])
-            mW=np.linalg.inv(mW)       
-        elif sWeightType == 'mint_struc':  #structural scaling
-            mW=np.diag(np.sum(self.mS, axis=1))
-            mW=np.linalg.inv(mW)   
-        elif sWeightType == 'mint_diag' or sWeightType == 'mint_hvar': #variance scaling  or wls
+                    mW=diag_mat([mW,mSigma_level])      
+        elif sWeightType == 'wls_struc':  #structural scaling
+            fVar=split_matrix(mRes_centered,self.dLevels)[-1].var()
+            mW=fVar*np.diag(np.sum(self.mS, axis=1))  
+        elif sWeightType == 'mint_diag':
             mW=np.diag(np.diag(mSigma))
-            mW=np.linalg.inv(mW)      
+            mW=np.linalg.inv(mW)  
+        elif sWeightType == 'mint_hvar': #hieararchy scaling  
+            mW=np.diag(np.diag(mSigma))      
         elif sWeightType == 'mint_sample':  # full
             mW = np.linalg.inv(mSigma)   
         elif sWeightType == 'mint_shrink':
@@ -236,7 +247,7 @@ class Tree:
             # Calculate shrinkage intensity 
             dLambda = max(min((factor_shrinkage * sum_var_emp_corr) / (sum_sq_emp_corr ), 1.0), 0.0)
             mW = dLambda * mWD + (1-dLambda) * mWF
-            mW = np.linalg.inv(mW)    
+            mW = np.linalg.inv(mW) 
         
         self.mW=mW
     
@@ -265,135 +276,222 @@ class Tree:
             n=mS.shape[1]
             m=mS.shape[0]
             m0=np.full((n,m-1),0, dtype=int)
-            iB= len([sublist for sublist in self.list_of_leafs if sublist.count(None) == 0])# integer length of bottom level
+            if self.sType=='spatial':
+                iB= len([sublist for sublist in self.list_of_leafs if sublist.count(None) == 0])# integer length of bottom level
+            else:
+                iB=7 #TODO
             if sWeigthType=='top_down_hp': #historical proportions
-                #TODO 70 dynamic
                 vP = np.mean((self.mY[-iB:]/self.mY[0,:]),axis=1)
             elif sWeigthType=='top_down_ph': #proportions of the historical averages
-                vP = np.mean(self.mY[-iB:],axis=1)/np.mean(self.mY[0,:],axis=0)
-            # elif sWeigthType=='top_down_fp': #forecast proportions
-            #     vP = 
+                vP = np.mean(self.mY[-iB:] , axis=1)/np.mean(self.mY[0,:],axis=0)
             vP=vP.reshape((iB,1))
             mP=np.hstack((vP,m0))
             self.mP=mP    
-        # else:
-        #     mWinv = np.linalg.inv(mW)
-        #     mP= (np.linalg.inv(mS.T @ (mWinv @ mS)) @ (mS.T @ (mWinv)))
-        #     self.mP=mP
         else:
              mP = (np.linalg.inv(mS.T @ (mW @ mS)) @ (mS.T @ (mW)))
-             self.mP=mP    
+             self.mP = mP    
     
-    def tune_Prophet(self, random_size=30,initial=1548,period=28,horizon=28,metric='rmse' , mX =None , 
-                     dfHolidays=None, dfChangepoints=None):       
+    def tune_temporal_prophet(self, sTransform:str , iSize:int, iInitial:int, iPeriod:int, iHorizon:int, sMetric='rmse',
+                              mX=None,dfHolidays=None, dfChangepoints=None ):
+        """
+        Tunes temporal and spatial series
+        """
+        for i,_ in enumerate(self.list_of_leafs):
+            df_data = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y']) 
+            
+            tree_temporal=Tree(dfData=df_data, sType='temporal', iLeaf=i)
+            tree_temporal.tune_prophet(sTransform=sTransform, iSize=iSize,
+                                       iInitial=iInitial,
+                                       iPeriod=iPeriod,
+                                       iHorizon=iHorizon, sMetric=sMetric,mX=mX,
+                                       dfHolidays=dfHolidays , dfChangepoints=dfChangepoints)
+    
+    def forecast_temporal_prophet(self, iOoS:int , sTransform:str , mX=None, dfHolidays=None, dfChangepoints=None ):
+        """
+        Forecast temporal prophet 
+        iOoS : number of oos forecasts to generate for the spatial tree , number of iOoS at bottom level of temporal tree
+        sTransfrom: a transform to apply to mY
+        mX : matrix of exogenous variable
+        dfHolidays:  dataframe of holidays to be passed to prophet
+        dfChangepoint: dataframe of changepoints to be passed to prophet
+        
+        """   
+        l_methods_temporal=["bottom_up" , "top_down_ph" ,"top_down_hp","wls_svar" ,"wls_acov", "ols",
+                            "wls_struct" , "wls_hvar" , "mint_sample", "mint_shrink" , "mint_diag" ] 
+        n=self.mY.shape[0]
+        m=iOoS
+        self.mYhat=np.zeros((n,m))
+        self.dForecasters={}
+    
+        for i,_ in enumerate(self.list_of_leafs):
+            df_data = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y']) 
+            
+            tree_temporal=Tree(dfData=df_data, sType='temporal' , iLeaf=i) 
+            
+            ############
+            # ddOutputs=tree_temporal.cross_validation(sTransform=sTransform, dfHolidays=dfHolidays,
+            #                                iInitial=int(tree_temporal.mY.shape[1]*0.9),
+            #                                iPeriod=time_converter(iOoS, from_unit='D' , to_unit='W')*4,
+            #                                iHorizon=time_converter(iOoS, from_unit='D' , to_unit='W'),
+            #                                lMethods=l_methods_temporal, sForecastMethod='prophet'
+            #                                )
+            # df_temporal_cv_results=getCVResults(h=time_converter(iOoS, from_unit='D' , to_unit='W'), 
+            #              iOoS=time_converter(iOoS, from_unit='D' , to_unit='W'),
+            #              ddOutputs=ddOutputs, metric='RMSE', 
+            #              slices=[7,1],  #TODO
+            #              rolling=True, iters=None)
+            # sSelectedWeightType = df_temporal_cv_results.loc['D'].idxmax()[0] #[0] compared to base
+            # print(sSelectedWeightType)
+
+            ##########################
+            ddISmatrices={}
+            tree_temporal.forecast_prophet(iOoS=7,sTransform=sTransform, mX=None, dfHolidays=dfHolidays)
+            for method in l_methods_temporal:
+                tree_temporal.reconcile(method)
+                ddISmatrices[method]={}
+                ddISmatrices[method]['mYtilde']=tree_temporal.mYtildeIS
+                ddISmatrices[method]['mYtrue']=tree_temporal.mY
+                ddISmatrices[method]['mYhat']=tree_temporal.mYhat
+            
+            df_is_results=getCVResults(h=time_converter(iOoS, from_unit='D' , to_unit='W'), 
+                         iOoS=time_converter(iOoS, from_unit='D' , to_unit='W'),
+                         dOutputs=ddISmatrices, metric='MSE', 
+                         slices=[7,1],  #TODO
+                         rolling=True, iters=None)
+            sSelectedWeightType=df_is_results.loc['D'].idxmax()[0] #[0] compared to base
+            
+
+            ################################
+            
+            if i==0:
+                self.mYhatIS = np.zeros((self.mY.shape[0],tree_temporal.dfData.shape[0]))  #tree_temporal pottentially cuts data to fit the tree
+                # self.mRes = np.zeros((self.mY.shape[0], self.mYhatIS.shape[1]))
+            tree_temporal.forecast_prophet( iOoS=iOoS, sTransform=sTransform, dfHolidays=dfHolidays)
+            
+            # sSelectedWeightType='bottom_up'
+            # if i >=40:
+            #     sSelectedWeightType='top_down_hp'
+            # sSelectedWeightType='top_down_hp'
+            tree_temporal.reconcile(sSelectedWeightType)
+            self.dForecasters[i]=tree_temporal.dForecasters
+            self.mYhat[i] = split_matrix(tree_temporal.mYtilde,tree_temporal.dLevels)[-1].flatten(order='F')
+            self.mYhatIS[i] = split_matrix(tree_temporal.mYtildeIS,tree_temporal.dLevels)[-1].flatten(order='F')
+            # self.mYhatIS[i] = split_matrix(tree_temporal.mYhatIS,tree_temporal.dLevels)[-1].flatten(order='F')
+
+                
+        self.mRes=self.mYhatIS-self.mY[:,-self.mYhatIS.shape[1]:] #because some of mYhatIS might be missing
+    
+    def tune_prophet(self, sTransform:str, iSize:int, iInitial:int, iPeriod:int, iHorizon:int, sMetric='rmse', 
+                     mX =None , dfHolidays=None, dfChangepoints=None):       
         """
         Tunes prophet and saves parameters per leaf into ddParams
-        Initial = 1548 = (mY.shape[1]-365)*0.7
         
         """  
-        iIters=int((self.mY.shape[1] - initial-horizon)/(period))+1
+        if self.sType=='temporal':
+            iIters=int((self.dfData.shape[0]-iInitial-iHorizon)/(iPeriod))+1
+        elif self.sType=='spatial':
+            iIters=int((self.mY.shape[1] - iInitial-iHorizon)/(iPeriod))+1
         print("Number of CV iterations used for tuning = " + str(iIters))
         
-        self.ddParams={}
-        if self.type=='spatial':
-            for i, _ in enumerate(self.list_of_leafs):
-                dfData = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])           
-                pht = Forecast_Prophet(dfData=dfData, 
-                                    dfX=mX[i] if mX is not None else None, 
+        try:
+            with open("c:\\Users\\31683\\Desktop\\data\\M5\\ddParams_" + f"prophet_{sTransform}.pkl", 'rb') as file:
+                dd_Params  = pickle.load(file) 
+        except:
+            dd_Params={}    
+        
+        if self.sType=='spatial':
+            for iLeaf, _ in enumerate(self.list_of_leafs):
+                if f"{iLeaf}_{self.sFreqData}" in dd_Params:
+                    continue
+                df_data = pd.DataFrame(data=self.mY[iLeaf] , index=self.date_time_index , columns=['y'])           
+                pht = Forecast_Prophet(dfData=df_data, 
+                                    dfX=mX[iLeaf] if mX is not None else None, 
                                     dfHolidays=dfHolidays,
                                     dfChangepoints=dfChangepoints)
+                if sTransform is not None:
+                    pht.transform(sTransform)    
 
-                pht.tune(random_size=random_size,
-                        initial=initial,
-                        period=period,
-                        horizon=horizon,
-                        metric=metric, 
+                pht.tune(iSize=iSize,
+                        iInitial=iInitial,
+                        iPeriod=iPeriod,
+                        iHorizon=iHorizon,
+                        sMetric=sMetric, 
                         parallel='processes',
-                        plot=False) 
+                        bPlot=False) 
                 
-                self.ddParams[i]=pht.dParams
-        elif self.type=='temporal':
+                dd_Params[f"{iLeaf}_{self.sFreqData}"]=pht.dParams
+        elif self.sType=='temporal':
             for i,sFreq in enumerate(self.levels):
-                dfData=self.dfData.resample(sFreq).sum()
-                dfData = pd.DataFrame(data=dfData.values , index=dfData.index , columns=['y'])
+                if f"{self.iLeaf}_{sFreq}" in dd_Params:
+                    continue
+                df_data=self.dfData.resample(sFreq).sum()
+                df_data = pd.DataFrame(data=df_data.values , index=df_data.index , columns=['y'])
                     
-                pht = Forecast_Prophet(dfData=dfData, dfX= mX[i] if mX is not None else None,  #TODO  for weekly data maybe other params?
+                pht = Forecast_Prophet(dfData=df_data, dfX= mX[i] if mX is not None else None,  #TODO  for weekly data maybe other params?
                                     dfHolidays=dfHolidays, dfChangepoints=dfChangepoints)
-                pht.tune(random_size=random_size,
-                        initial=initial,
-                        period=period,
-                        horizon=horizon,
-                        metric=metric, 
-                        parallel='processes',
-                        plot=False) 
-                self.ddParams[i]=pht.dParams
-            
-        #save parameters
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # Format: YYYYMMDD_HHMMSS
-        file_path = os.path.join("c:\\Users\\31683\\Desktop\\data\\M5", f"ddParams_Prophet_{timestamp}.pkl")
-        with open(file_path, "wb") as myFile:
-            pickle.dump(self.ddParams, myFile)
-            
-    def tune_ARIMA(self):       
-        """
-        Tunes ARIMA and saves parameters per leaf into ddParams
-        """  
-        self.ddParams={}
-        if self.type=='spatial': 
-            for i, _ in enumerate(self.list_of_leafs):
-                dfData = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])
-                arima=Forecast_ARIMA(dfData=dfData)
-                arima.tune()
-                self.ddParams[i]=arima.dParams
-        elif self.type=='temporal':
-            for i,sFreq in enumerate(self.levels):
-                dfData=self.dfData.resample(sFreq).sum()
-                arima=Forecast_ARIMA(dfData=dfData)
-                arima.tune()
-                self.ddParams[i]=arima.dParams
                 
-        #save parameters
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # Format: YYYYMMDD_HHMMSS
-        file_path = os.path.join("c:\\Users\\31683\\Desktop\\data\\M5", f"ddParams_ARIMA_{timestamp}.pkl")
-        with open(file_path, "wb") as myFile:
-            pickle.dump(self.ddParams, myFile)
+                if sTransform is not None:
+                    pht.transform(sTransform)
                 
-    def forecast_Prophet(self , iOoS:int, mX=None, dfHolidays=None, dfChangepoints=None , ddParams = None):  #get mYhat
+                pht.tune(iSize=iSize,
+                         iInitial = time_converter(iInitial ,self.sFreqData, sFreq),
+                         iPeriod  = time_converter(iPeriod  ,self.sFreqData, sFreq),
+                         iHorizon = time_converter(iHorizon ,self.sFreqData, sFreq),
+                         sMetric = sMetric, 
+                         parallel = 'processes',
+                         bPlot = False)  
+                dd_Params[f"{self.iLeaf}_{sFreq}"]=pht.dParams  #X is a placeholder
+        #save parameters
+        file_path = "c:\\Users\\31683\\Desktop\\data\\M5\\ddParams_" + f"prophet_{sTransform}.pkl"
+        with open(file_path, "wb") as myFile:
+            pickle.dump(dd_Params, myFile)    
+    
+    def tune_arima(self):
+        return       
+            
+    def forecast_prophet(self , iOoS:int, sTransform:str , mX=None, dfHolidays=None, dfChangepoints=None ): 
         """
         Performs the forecast algorithm at each leaf
         iOoS: of bottom level series
-        tune (bool)  : tunes if true
 
         """ 
 
         self.dForecasters={}
-        self.ddParams=ddParams
+        
+        #get parameters
+        try:
+            with open("c:\\Users\\31683\\Desktop\\data\\M5\\ddParams_" + f"prophet_{sTransform}.pkl", 'rb') as file:
+                ddParams  = pickle.load(file) 
+        except:
+            ddParams={} 
 
-        if self.type=='temporal': #then it is temporal reconciliation            
-            for i,sFreq in enumerate(self.levels):
-                dfData=self.dfData.resample(sFreq).sum()
-                dfY = pd.DataFrame(data=dfData.values , index=dfData.index , columns=['y'])
-                
-                # if mX is not None:  #TODO
-                #     print('No mX')
-                # else:
-                #     dfX=None
-                    
+        if self.sType=='temporal':           
+            for i,sFreq in enumerate(self.levels): #start from lowest freq -> W
+                df_data=self.dfData.resample(sFreq).sum()
+                dfY = pd.DataFrame(data=df_data.values , index=df_data.index , columns=['y'])                   
                 pht = Forecast_Prophet(dfData=dfY, dfX= mX[i] if mX is not None else None,
                                         dfHolidays=dfHolidays, dfChangepoints=dfChangepoints,
-                                        dParams = ddParams[i] if ddParams is not None else None)
-                pht.forecast(iOoS=int(time_converter(iOoS,self.levels[-1],sFreq)))
-                self.dForecasters[i]=pht
-                if sFreq==self.levels[0]:
-                    self.mYhat = pht.vYhatOoS.reshape(1,pht.vYhatOoS.shape[0])
-                    self.mYhatIS = pht.vYhatIS.reshape(self.dLevels[sFreq], self.mY.shape[1])
-                else:
-                    mYhat = pht.vYhatOoS.reshape( self.dLevels[sFreq],self.mYhat.shape[1] )
-                    mYhatIS = pht.vYhatIS.reshape( self.dLevels[sFreq],self.mY.shape[1] )
+                                        dParams = ddParams[f"{self.iLeaf}_{sFreq}"] if ddParams is not None else None)
                 
-                    self.mYhatIS = np.vstack((self.mYhatIS,mYhatIS))
+                if sTransform is not None:
+                    pht.transform(sTransform)
+                    
+                f=int(time_converter(iOoS, from_unit = self.levels[-1] , to_unit = sFreq))
+                pht.forecast(iOoS=f)
+                
+                self.dForecasters[i]=pht  #save the forecaster into dict
+                
+                if sFreq==self.levels[0]: #if lowest freq -> W
+                    self.mYhat = pht.vYhatOoS.reshape( 1, pht.vYhatOoS.shape[0])
+                    self.mYhatIS = pht.vYhatIS.reshape( 1 , pht.vYhatIS.shape[0])
+                else:
+                    mYhat = pht.vYhatOoS.reshape( self.dLevels[sFreq],self.mYhat.shape[1] , order='F')
+                    mYhatIS = pht.vYhatIS.reshape( self.dLevels[sFreq],self.mYhatIS.shape[1] , order='F')
+                
                     self.mYhat=np.vstack((self.mYhat,mYhat)) 
-        elif self.type=='spatial':
+                    self.mYhatIS = np.vstack((self.mYhatIS,mYhatIS))
+                    
+        elif self.sType=='spatial':
             self.mYhatIS = np.zeros((self.mY.shape[0], self.mY.shape[1]))
             self.mRes = np.zeros((self.mY.shape[0], self.mY.shape[1]))
                         
@@ -401,71 +499,24 @@ class Tree:
             m=iOoS
             self.mYhat=np.zeros((n,m))
             
-            for i in range(self.mY.shape[0]):
+            for i in range(self.mY.shape[0]): # start from leaf 0
                 dfY = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])   
-                # if mX is not None:
-                #     dfX = pd.DataFrame(data=mX[i] , 
-                #                    index=self.date_time_index.append(pd.date_range(start=self.date_time_index[-1] + pd.Timedelta(days=1),
-                #                                                                                 periods=iOoS, freq='D')) , 
-                #                    columns=['price'])
-                # else:
-                #     dfX=None
                             
                 pht = Forecast_Prophet(dfData=dfY, dfX= mX[i] if mX is not None else None,
                                         dfHolidays=dfHolidays,dfChangepoints=dfChangepoints,
-                                        dParams = ddParams[i] if ddParams is not None else None)
+                                        dParams = ddParams[f"{i}_{self.sFreqData}"] if ddParams is not None else None)
+                
+                if sTransform is not None:
+                    pht.transform(sTransform)
+                
                 pht.forecast(iOoS=iOoS)
                 self.dForecasters[i]=pht
                 self.mYhat[i] = pht.vYhatOoS
                 self.mYhatIS[i] = pht.vYhatIS                                       
                         
         self.mRes=self.mYhatIS-self.mY    
+                          
     
-    def forecast_ARIMA(self, iOoS:int ,ddParams = None):
-        """_summary_
-
-        Args:
-            iOoS (int): _description_
-        """
-        self.dForecasters={}
-        self.ddParams=ddParams
-
-
-        if self.type=='temporal': #then it is temporal reconciliation            
-            for i,sFreq in enumerate(self.levels):
-                dfData=self.dfData.resample(sFreq).sum()                
-                arima = Forecast_ARIMA(dfData=dfData, dParams = ddParams[i] if ddParams is not None else None)
-                f=int(time_converter(iOoS,self.levels[-1],sFreq))
-                arima.forecast(iOoS=f)
-                self.dForecasters[i]=arima
-                if sFreq==self.levels[0]:
-                    self.mYhat = arima.vYhatOoS.reshape(1,arima.vYhatOoS.shape[0])
-                    self.mYhatIS = arima.vYhatIS.reshape(self.dLevels[sFreq], self.mY.shape[1])
-                else:
-                    mYhat = arima.vYhatOoS.reshape( self.dLevels[sFreq],self.mYhat.shape[1] )
-                    mYhatIS = arima.vYhatIS.reshape( self.dLevels[sFreq],self.mY.shape[1])
-                
-                    self.mYhatIS = np.vstack((self.mYhatIS,mYhatIS))
-                    self.mYhat=np.vstack((self.mYhat,mYhat)) 
-        elif self.type=='spatial':
-            self.mYhatIS = np.zeros((self.mY.shape[0], self.mY.shape[1]))
-            self.mRes = np.zeros((self.mY.shape[0], self.mY.shape[1]))
-                        
-            n=self.mY.shape[0]
-            m=iOoS
-            self.mYhat=np.zeros((n,m))
-            
-            for i in range(self.mY.shape[0]):
-                dfData = pd.DataFrame(data=self.mY[i] , index=self.date_time_index , columns=['y'])   
-                            
-                arima = Forecast_ARIMA(dfData=dfData, dParams = ddParams[i] if ddParams is not None else None)
-                arima.forecast(iOoS=iOoS)
-                self.dForecasters[i]=arima
-                self.mYhat[i] = arima.vYhatOoS
-                self.mYhatIS[i] = arima.vYhatIS                                       
-                        
-        self.mRes=self.mYhatIS-self.mY     
-                         
     def reconcile(self , sWeightType: str):
         """
         Performs whole reconciliation algorithm 
@@ -473,12 +524,13 @@ class Tree:
         self.getMatrixW(sWeightType)      
         self.getMatrixP(sWeightType)            
         self.mYtilde=np.dot(np.dot(self.mS,self.mP),self.mYhat)
+        self.mYtildeIS=np.dot(np.dot(self.mS,self.mP),self.mYhatIS)
     
-    def cross_validation(self , dfHolidays, initial, period, horizon , lMethods ):
+    def cross_validation(self ,  sTransform:str , dfHolidays,  iInitial:int, iPeriod:int, iHorizon:int, lMethods:list, sForecastMethod:str):
         """Performs cross_validation and returns matrices required for assesment
 
         Args:
-            initial (_type_): _description_
+            initial (_type_):  if spatial, iOoS required, if spatial iOoS of lowest freq
             period (_type_): _description_
             horizon (_type_): _description_
             sWeightType (_type_): _description_
@@ -494,40 +546,58 @@ class Tree:
             print("cross_validation can only be performed on initiated Tree object")
             return
         
-        iIters=int((self.mY.shape[1] - initial-horizon)/(period))+1
-        print("Number of iterations is " + str(iIters))
+        iIters=int((self.mY.shape[1] - iInitial-iHorizon)/(iPeriod))+1
+        print("Number of CV folds = " + str(iIters))
  
         dOutputs={}
         
         for method in lMethods:
-            dOutputs[method]={}
+            dOutputs[method]={}  #TODO can be moved inside of \\for sWeightType in lMethods:\\  loop
             
-        for iter in range(iIters):   
+        for iter in range(iIters):  
+            if iter>50:
+                continue
             tree_iter = copy.copy(self) 
-            tree_iter.mY = self.mY[:, 0+period*iter : initial+period*iter ]
-            tree_iter.date_time_index=self.date_time_index[ 0+period*iter : initial+period*iter ]
-            
+            tree_iter.mY = self.mY[:, 0+iPeriod*iter : iInitial+iPeriod*iter ]
+            tree_iter.date_time_index=self.date_time_index[ 0+iPeriod*iter : iInitial+iPeriod*iter ]
+
+            if self.sType=='temporal':
+                tree_iter.dfData=tree_iter.dfData.iloc[0+time_converter(iPeriod,'W','D')*iter : time_converter(iInitial , 'W','D')+time_converter(iPeriod,'W','D')*iter]
             tree_iter_eval = copy.copy(self)
-            tree_iter_eval.mY = self.mY[:, period*iter+initial : period*iter+initial+horizon ]  
-            if tree_iter_eval.mY.shape[1]!=horizon:
-                break    
+            tree_iter_eval.mY = self.mY[:, iPeriod*iter+iInitial : iPeriod*iter+iInitial+iHorizon ]  
             
-            tree_iter.forecast_Prophet(iOoS=horizon, dfHolidays=dfHolidays, ddParams=self.ddParams)
-            tree_iter.forecast_AR()
+            #check if we are at the end of CV ( when there is not enough mY to fit iHorizon ammount of forecasts)
+            if tree_iter_eval.mY.shape[1]!=iHorizon:
+                break  
+ 
+            # tree_iter.tune_temporal_prophet()
+            if sForecastMethod=='prophet':
+                iOoS=iHorizon if self.sType=='spatial' else time_converter(iHorizon, from_unit='W' , to_unit='D')
+                tree_iter.forecast_prophet(iOoS=iOoS, 
+                                           sTransform=sTransform,
+                                           dfHolidays=dfHolidays)
+            elif sForecastMethod=='temporal_prophet':
+                tree_iter.forecast_temporal_prophet(iOoS=iHorizon ,
+                                                    sTransform=sTransform , 
+                                                    mX=None, 
+                                                    dfHolidays=dfHolidays,
+                                                    dfChangepoints=None )
             
             for sWeightType in lMethods:            
                 tree_iter.reconcile(sWeightType)  
                 
                 if iter!=0:
-                    dOutputs[sWeightType]['mYtrue'] = np.hstack([dOutputs[sWeightType]['mYtrue'] , tree_iter_eval.mY[:,-horizon:]])
-                    dOutputs[sWeightType]['mYhat'] = np.hstack([dOutputs[sWeightType]['mYhat'] , tree_iter.mYhat[:,-horizon:]])
-                    dOutputs[sWeightType]['mYtilde'] = np.hstack([dOutputs[sWeightType]['mYtilde'] , tree_iter.mYtilde[:,-horizon:]])
+                    dOutputs[sWeightType]['mYtrue'] = np.hstack([dOutputs[sWeightType]['mYtrue'] , tree_iter_eval.mY[:,-iHorizon:]])
+                    dOutputs[sWeightType]['mYhat'] = np.hstack([dOutputs[sWeightType]['mYhat'] , tree_iter.mYhat[:,-iHorizon:]])
+                    dOutputs[sWeightType]['mYtilde'] = np.hstack([dOutputs[sWeightType]['mYtilde'] , tree_iter.mYtilde[:,-iHorizon:]])
                 else:
-                    dOutputs[sWeightType]['mYtrue'] = tree_iter_eval.mY[:,-horizon:]
-                    dOutputs[sWeightType]['mYhat'] = tree_iter.mYhat[:,-horizon:]  #TODO is there need for horizon here?
-                    dOutputs[sWeightType]['mYtilde'] = tree_iter.mYtilde[:,-horizon:] #TODO is there need for horizon here?
+                    dOutputs[sWeightType]['mYtrue'] = tree_iter_eval.mY[:,-iHorizon:]
+                    dOutputs[sWeightType]['mYhat'] = tree_iter.mYhat[:,-iHorizon:]  #TODO is there need for horizon here?
+                    dOutputs[sWeightType]['mYtilde'] = tree_iter.mYtilde[:,-iHorizon:] #TODO is there need for horizon here?
                     dOutputs[sWeightType]['mW']=tree_iter.mW
-            print("CV iterations completed = " + str(iter+1) + " of " + str(iIters))
+                    
+            if self.sType == 'spatial':
+                print("CV iterations completed = " + str(iter+1) + " of " + str(iIters))
         
         return dOutputs 
 

@@ -21,6 +21,8 @@ from tqdm import tqdm
 import logging
 import random
 import itertools
+from scipy.stats import probplot
+from dask.distributed import Client
 
 
 
@@ -49,27 +51,38 @@ class Forecast_Prophet:
         """
         self.dfData=dfData    # data , [0] to be forecasted, index must be datetime index
         self.dfX=dfX 
-        self.transform_type=None
+        self.sTransform=None
+        self.sFreq=pd.infer_freq(dfData.index)[0] # get W of W-SUN
         
         if dfHolidays is not None: # then there are holidays to incorporate
             holiday_dfs=[]
-            for i,holiday in enumerate(dfHolidays): 
-                h=pd.DataFrame({
-                                'holiday': str(i+1), #holiday name , #TODO redundant?
-                                'ds': pd.to_datetime([dfHolidays.iloc[i][0]])
-                                })
-                holiday_dfs.append(h)
+            for i in range(dfHolidays.shape[0]):  
+                if self.sFreq=='D':
+                    h=pd.DataFrame({
+                                    'holiday': str(i+1), 
+                                    'ds': pd.to_datetime([dfHolidays.iloc[i][0]])
+                                    })
+                    holiday_dfs.append(h)
+                elif self.sFreq=='W':
+                    holiday_date = pd.to_datetime(dfHolidays.iloc[i][0])
+                    sunday_date = (holiday_date + timedelta(days=(6 - holiday_date.weekday()))).strftime('%Y-%m-%d')
+                    h=pd.DataFrame({
+                                    'holiday': str(i+1), #holiday name , #TODO redundant?
+                                    'ds': pd.to_datetime([sunday_date])
+                                    })
+                    holiday_dfs.append(h)
                 
             #add christmas on top
-            mask_is_christmas = np.vectorize(lambda date: (datetime.strptime(date, '%Y-%m-%d').month == 12) & (datetime.strptime(date, '%Y-%m-%d').day == 25))
-            christmas=dfHolidays[mask_is_christmas(dfHolidays)]
-            if len(christmas)>0:
-                c= pd.DataFrame({
-                    'holiday':'Christmas',
-                    'ds': pd.to_datetime(christmas.iloc[:,0])
-                    })
-                holiday_dfs.append(c)
-                self.dfHolidays=pd.concat(holiday_dfs, ignore_index=True)
+            # mask_is_christmas = np.vectorize(lambda date: (datetime.strptime(date, '%Y-%m-%d').month == 12) & (datetime.strptime(date, '%Y-%m-%d').day == 25))
+            # christmas=dfHolidays[mask_is_christmas(dfHolidays)]
+            # if len(christmas)>0:
+            #     c= pd.DataFrame({
+            #         'holiday':'Christmas',
+            #         'ds': pd.to_datetime(christmas.iloc[:,0])
+            #         })
+            #     holiday_dfs.append(c)
+            #     self.dfHolidays=pd.concat(holiday_dfs, ignore_index=True)
+            self.dfHolidays=pd.concat(holiday_dfs, ignore_index=True)
         else:
             self.dfHolidays=None
         if dfChangepoints is not None:
@@ -79,24 +92,22 @@ class Forecast_Prophet:
             self.changepoints=None
                            
         
-        # number of OoS forecast to generate in the same granularity as srY
-        self.sFreq=self.dfData.index.inferred_freq
-        
         if dParams is None:
             #default parameters
             self.changepoint_prior_scale = 0.05 
             self.seasonality_prior_scale = 10
             self.holidays_prior_scale = 10 
             self.seasonality_mode = 'additive'  #LOOK at the data
-            self.weekly_seasonality = 3
-            self.yearly_seasonality = 10
+            self.weekly_prior_scale =10
         else:
             self.changepoint_prior_scale = dParams["changepoint_prior_scale"] 
             self.seasonality_prior_scale = dParams["seasonality_prior_scale"]
             self.holidays_prior_scale = dParams["holidays_prior_scale"] 
             self.seasonality_mode = dParams["seasonality_mode"]
-            self.weekly_seasonality = dParams["weekly_seasonality"]
-            self.yearly_seasonality = dParams["yearly_seasonality"]
+            # self.weekly_seasonality = dParams["weekly_seasonality"]
+            # self.monthly_seasonality = dParams["monthly_seasonality"]
+            # self.yearly_seasonality = dParams["weekly_seasonality"]
+       
             
         self.model=None
         self.dfModel=None
@@ -113,30 +124,32 @@ class Forecast_Prophet:
         Transform back to original scale
         Perform after tuning and forecasting
         """
-        if self.transform_type=='log':
+        if self.sTransform=='log':
             self.dfData=np.exp(self.dfData)
             self.vYhatIS=np.exp(self.vYhatIS)
             self.vYhatOoS=np.exp(self.vYhatOoS)
-            self.vRes=self.vYhatIS-self.dfData['y']
+            # self.vRes=self.vYhatIS-self.dfData['y'].values
             
             #populate performance metrics
-            self.rmse=np.sqrt(np.mean((self.vYhatIS-self.dfData.y )** 2))
-            self.mape=np.mean(np.abs((self.dfData.y[self.dfData.y != 0] - self.vYhatIS[self.dfData.y != 0]) / self.dfData.y[self.dfData.y != 0])) * 100
+            self.rmse=np.sqrt(np.median((self.vYhatIS-self.dfData.y )** 2))
+            self.mape=np.median(np.abs((self.dfData.y[self.dfData.y != 0] - self.vYhatIS[self.dfData.y != 0]) / self.dfData.y[self.dfData.y != 0])) * 100
             self.var=(self.vYhatIS-self.dfData.y ).var()
+        else:
+            return
             
-    def transform(self, type:str):
+    def transform(self, sType:str):
         """
         Transforms the data 
         Apply before doing any tuning or forecasting
         """    
-        self.transform_type=type
-        if type=='log':
-            self.dfData=np.log(self.dfData)    # data , [0] to be forecasted, index must be datetime index
-            if self.dfX is not None:
-                self.dfX=np.log(self.dfX) 
-            
+        self.sTransform=sType
         
-    def tune(self, random_size:int , initial:int, period:int, horizon:int , metric:str , parallel='processes' ,plot=False):
+        if self.sTransform=='log':
+            self.dfData=np.log(self.dfData + 1e-6)
+            if self.dfX is not None:
+                self.dfX=np.log(self.dfX + 1e-6) 
+            
+    def tune(self, iSize:int , iInitial:int, iPeriod:int, iHorizon:int , sMetric:str , parallel='processes' , bPlot=False):
         """
         Tunes recommended (by developers) parameters: changepoint_prior_scale, seasonality_prior_scale, holidays_prior_scale, seasonality_mode
         
@@ -168,51 +181,67 @@ class Forecast_Prophet:
         df.rename(columns={'index' : 'ds'}, inplace=True)
         
         param_grid = {  
-            'changepoint_prior_scale': [0.001, 0.01, 0.1, 0.25 , 0.5],
-            'seasonality_prior_scale': [0.01, 0.1, 1.0, 5 , 10.0],
-            'holidays_prior_scale': [0.01 , 0.1, 1 , 5 , 10.0] , 
+            'changepoint_prior_scale': [0.001,  0.1,  0.5],
+            'seasonality_prior_scale': [0.01, 0.1, 1.0, 5 ,  10.0],
+            'holidays_prior_scale': [0.01 , 1 ,  10.0] , 
             'seasonality_mode': ['additive',  'multiplicative'],
-            'weekly_seasonality': [ 2,  3,  5  ],
-            'yearly_seasonality': [ 10 , 15 , 20 , 25 ]
+            'weekly_prior_scale': [ 0.01,  0.1 , 1 ,  5 , 10 ],
+            # 'monhtly_seasonality': [ 3 , 4, 5 , 6] ,
+            # 'yearly_seasonality': [ 10 , 15 , 20 , 25 ]
         }
 
         # Generate all combinations of parameters
         all_params = [dict(zip(param_grid.keys(), v)) for v in itertools.product(*param_grid.values())]
         vMetrics = []  # Store the metrics for each params here
-        random_params = random.sample(all_params, min(random_size, len(all_params)))
+        random_params = random.sample(all_params, min(iSize, len(all_params)))
         #add deafult so that it cant be worse than default
-        random_params.append({'changepoint_prior_scale': self.changepoint_prior_scale,
+        random_params.append({
+            'changepoint_prior_scale': self.changepoint_prior_scale,
             'seasonality_prior_scale': self.seasonality_prior_scale,
             'holidays_prior_scale': self.holidays_prior_scale, 
             'seasonality_mode': self.seasonality_mode,
-            'weekly_seasonality': self.weekly_seasonality,
-            'yearly_seasonality' : self.yearly_seasonality})
+            'weekly_prior_scale': self.weekly_prior_scale
+            })
     
         # Use cross validation to evaluate all parameters
-        initial = str(initial) + ' days' #TODO link with sFreq
-        period  = str(period)  + ' days'
-        horizon = str(horizon) + ' days' 
+        initial = str(iInitial) + " "+self.sFreq 
+        period  = str(iPeriod)  + " "+self.sFreq 
+        horizon = str(iHorizon) + " "+self.sFreq  
         
         for params in tqdm(random_params, desc='Tuning Progress'):
-            m = Prophet(holidays=self.dfHolidays , **params).fit(df)  # Fit model with given params
-            df_cv = cross_validation(m, initial=initial, period=period, horizon=horizon, parallel=parallel)
+            m = Prophet(holidays=self.dfHolidays , changepoint_prior_scale=params['changepoint_prior_scale'],
+                        seasonality_prior_scale=params['seasonality_prior_scale'],
+                        holidays_prior_scale= params['holidays_prior_scale'],
+                        seasonality_mode=params['seasonality_mode']
+                        )  # Fit model with given params
+            if self.sFreq=='D':
+                m.add_seasonality(name='weekly', 
+                                  period=7, fourier_order=3, 
+                                  prior_scale=params['weekly_prior_scale'])
+            if self.sFreq=='W':
+                m.add_seasonality(name='monthly', period=30.5, fourier_order=5)
+            m.add_seasonality(name='yearly', period=365.5, fourier_order=10)
+            m.fit(df)
+            
+            df_cv = cross_validation(m, initial=initial, period=period,
+                                     horizon=horizon, parallel=parallel)
             df_p = performance_metrics(df_cv)
-            vMetrics.append(df_p[metric].values[0])
+            vMetrics.append(df_p[sMetric].values[0])
 
         # Find the best parameters
         tuning_results = pd.DataFrame(random_params)
-        tuning_results[metric] = vMetrics
+        tuning_results[sMetric] = vMetrics
         best_params = random_params[np.argmin(vMetrics)]
 
-        if plot==True: 
-            plot_cross_validation_metric(df_cv, metric=metric)
+        if bPlot==True: 
+            plot_cross_validation_metric(df_cv, metric=sMetric)
                     
         self.changepoint_prior_scale = best_params['changepoint_prior_scale']
         self.seasonality_prior_scale = best_params['seasonality_prior_scale']
         self.holidays_prior_scale = best_params['holidays_prior_scale'] 
         self.seasonality_mode = best_params['seasonality_mode']  
-        self.weekly_seasonality = best_params['weekly_seasonality'] 
-        self.yearly_seasonality = best_params['yearly_seasonality'] 
+        self.weekly_prior_scale = best_params['weekly_prior_scale']
+
         self.dParams=best_params
         print('Tuning has been terminated succesfully')
 
@@ -241,9 +270,16 @@ class Forecast_Prophet:
                       changepoint_prior_scale= self.changepoint_prior_scale,
                       seasonality_prior_scale=self.seasonality_prior_scale ,
                       holidays_prior_scale=self.holidays_prior_scale ,
-                      seasonality_mode=self.seasonality_mode,
-                      weekly_seasonality=self.weekly_seasonality,
-                      yearly_seasonality=self.yearly_seasonality)
+                      seasonality_mode=self.seasonality_mode)
+        
+        if self.sFreq=='D':
+            model.add_seasonality(name='weekly', period=7, fourier_order=5 , 
+                                  prior_scale= 20 )
+            model.add_seasonality(name='monthly', period=30.5, fourier_order=5)
+        if self.sFreq=='W':
+            model.add_seasonality(name='monthly', period=30.5, fourier_order=5)
+        model.add_seasonality(name='yearly', period=365.5, fourier_order=10)
+        
         
         if self.dfX is not None: # add regressors
             for regressor in self.dfX.columns:
@@ -261,17 +297,17 @@ class Forecast_Prophet:
         
         self.vYhatIS=dfModel.yhat.values[:-self.iOoS]
         self.vYhatOoS=dfModel.yhat.values[-self.iOoS:]
-        self.vRes=self.vYhatIS-self.dfData['y']
+        self.vRes=self.vYhatIS-self.dfData['y'].values
         self.model=model
         self.dfModel=dfModel
         
         #populate performance metrics
-        self.rmse=np.sqrt(np.mean((self.vYhatIS-self.dfData.y )** 2))
-        self.mape=np.mean(np.abs((self.dfData.y[self.dfData.y != 0] - self.vYhatIS[self.dfData.y != 0]) / self.dfData.y[self.dfData.y != 0])) * 100
+        self.rmse=np.sqrt(np.median((self.vYhatIS-self.dfData.y )** 2))
+        self.mape=np.median(np.abs((self.dfData.y[self.dfData.y != 0] - self.vYhatIS[self.dfData.y != 0]) / self.dfData.y[self.dfData.y != 0])) * 100
         self.var=(self.vYhatIS-self.dfData.y ).var()
-    
-    
         
+        self.retransform()
+           
         
     def plot_prediction(self,inSample=True):
         """
@@ -283,7 +319,7 @@ class Forecast_Prophet:
             start = self.dfData.index[-1] + pd.DateOffset(months=1)
         elif self.sFreq == 'D':
             start = self.dfData.index[-1] + pd.DateOffset(days=1)
-        elif self.sFreq == 'W' or self.sFreq == 'W-SUN' :
+        elif self.sFreq == 'W' :
             start = self.dfData.index[-1] + pd.DateOffset(weeks=1)
         elif self.sFreq == 'H':
             start = self.dfData.index[-1] + pd.DateOffset(hours=1)
@@ -295,8 +331,8 @@ class Forecast_Prophet:
             raise ValueError(f"Unsupported frequency: {self.sFreq}")
         periods=self.iOoS
         srYhatOoS=pd.Series(self.vYhatOoS,index=pd.date_range(start=start,periods=periods,freq=self.sFreq) )          
-        plt.figure(figsize=(12, 6))
         
+        plt.figure(figsize=(12, 6))
         if inSample==True:
             # Plot dfData
             plt.plot(self.dfData.index, self.dfData, label='Actual Data', color='green',linestyle='', marker='o',markersize=4)
@@ -318,29 +354,26 @@ class Forecast_Prophet:
         plt.title('In-Sample, and Out-of-Sample Forecasts')
         plt.legend()
         plt.grid(True)
-        plt.show()
+        plt.show()      
         
+        fig = self.model.plot_components(self.dfModel)
+        fig
+            
+    def residual_diagnostic(self):
+        """
+        Plots residual diagnostics 
+        """    
         # Plot errors
         plt.figure(figsize=(12, 6))
-        # if inSample==True:
-        #     plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
-        # else:
-        #     plt.plot(srYhatIS.index[-self.iOoS*2:] , srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residual', color='red')
-        plt.plot(srYhatIS.index , srYhatIS - self.dfData.y, label='Residual', color='red')
-
+        plt.plot(self.dfData.index , self.vRes, label='Residual', color='red')
         plt.xlabel('Date')
         plt.ylabel('Value')
         plt.title('Residuals time-series')
         plt.legend()
         plt.grid(True)
-        plt.show()
+        plt.show() 
         
-        plt.figure(figsize=(12, 6))
-        # if inSample==True:
-        #     plt.hist( srYhatIS - self.dfData.y, label='Residuals')
-        # else:
-        #     plt.hist( srYhatIS[-self.iOoS*2:] - self.dfData[-self.iOoS*2:].y, label='Residuals')
-        plt.hist( srYhatIS - self.dfData.y, label='Residuals')
+        plt.hist( self.vRes, label='Residuals')
         plt.xlabel('Values')
         plt.ylabel('Frequency')
         plt.title('Residuals histogram')
@@ -348,24 +381,24 @@ class Forecast_Prophet:
         plt.grid(True)
         plt.show()
         
-        
+        plt.figure(figsize=(12, 6))
+        probplot(self.vRes, dist="norm", plot=plt)
+        plt.title('Residuals QQ Plot')
+        plt.grid(True)
+        plt.show()
+                
         #residual autocorrelation
-        plot_acf(srYhatIS - self.dfData.y, lags=31)  
+        plot_acf(self.vRes, lags=31)  
         plt.xlabel('Lags')
         plt.title('Autocorrelation Function (ACF) of Residuals') 
         plt.ylabel('Autocorrelation')
         plt.show()    
         
-        plot_pacf(srYhatIS - self.dfData.y, lags=31)  
+        plot_pacf(self.vRes, lags=31)  
         plt.xlabel('Lags')
         plt.title('Partial Autocorrelation Function (PACF) of Residuals') 
         plt.ylabel('Partial Autocorrelation')
         plt.show()  
-        
-        
-        fig = self.model.plot_components(self.dfModel)
-        fig
-            
 
 
     
