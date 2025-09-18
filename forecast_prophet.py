@@ -244,8 +244,7 @@ class Forecast_Prophet:
 
         self.dParams=best_params
         print('Tuning has been terminated succesfully')
-
-        
+    
     def forecast(self, iOoS:int, scaling="absmax") :       
         """
         Fit Prophet model for daily (and weekly data? TODO)

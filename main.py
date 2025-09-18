@@ -7,24 +7,25 @@ import os
 # reload(simulation)
 # from simulation import *
 
-import leaf
-reload(leaf)
-from leaf import *
+# import leaf
+# importlib.reload(leaf)
+# from leaf import *
 
-import forecast_arima
-reload(forecast_arima)
-from forecast_arima import *
+import forecast_ucm
+reload(forecast_ucm)
+from forecast_ucm import *
 
 import Tree
-reload(Tree)
+import importlib
+importlib.reload(Tree)
 from Tree import *
 
 import forecast_prophet
-reload(forecast_prophet)
+importlib.reload(forecast_prophet)
 from forecast_prophet import *
 
 import utils
-reload(utils)
+importlib.reload(utils)
 from utils import *
 
 import logging
@@ -165,6 +166,8 @@ def get_mX(path):
     
     return mX
 
+  
+  
     
 def main():
     """
@@ -194,9 +197,9 @@ def main():
     """
     path='c:\\Users\\31683\\Desktop\\data\\M5'
     Y_path=path+f"\\sales_train_validation.pkl"  # to data file  
-    prepare_prices(path)
-    X_path=os.getcwd()+f"\\prices_train_val_eval.pkl"  # to data file
-    prepare_weights(path)
+    # prepare_prices(path)  #WHAT DOES THIS DO?
+    price_path=path+f"\\prices_train_val_eval.pkl"
+    # prepare_weights(path)
     
     ####################################
     weight_type = "diag"
@@ -208,23 +211,48 @@ def main():
     weight_type = "ols"
     ####################################
     
-    iOoS=28  # at the bottom forecast frequency if temporal
+    iOoS=7  # at the bottom forecast frequency if temporal
     
+    df_data=pd.read_pickle(Y_path)
+    df_data.iloc[:,:4]=df_data.iloc[:,:4].astype('string') # change the type to string so that groupby maintains store and dept ids
+    df_data.drop(columns=['2011-01-29','2011-01-30'],inplace=True) #start on Monday
+
+    df_holidays=pd.read_csv(path+f"\\holidays.csv")
+    df_holidays['date'] = pd.to_datetime(df_holidays['date'])
+
+    df_price=pd.read_pickle(price_path,compression='gzip')
+    df_price.drop(columns=['2011-01-29','2011-01-30'],inplace=True)
     
-    #additional (optional) data for Prophet forecasting
-    mX  = get_mX(X_path)
-    holidays=pd.read_csv(path+f"\\holidays.csv")
-    holidays=holidays.values.flatten()
-    # changepoints=pd.read_csv(os.getcwd()+f"\\data\\M5\\changepoints.csv")
-    # changepoints=changepoints.values.flatten()
+    df_snap=pd.read_csv(path+f"\\calendar.csv")[['snap_CA','snap_WI','snap_TX']]
+    df_snap.columns=[['CA','WI','TX']]
+    df_snap=df_snap[2:].reset_index()
+    df_snap.T.columns=df_price.columns[5:]
+    df_snap=pd.merge(df_price.iloc[:,:5],df_snap.T,left_on='state_id',right_index=True)
     
-    #weights for M5 competition testing
-    vW=np.loadtxt(path+f"\\weights.txt")
-    vW=vW[:114]
+    vW=np.loadtxt(path+f"\\weights.txt")  #m5 competition weights
+    vW=vW[:114]  #drop subsetting if product level data is added
+    
+    #delete below if item level is added
+    df_price=df_price.groupby(['state_id','store_id','cat_id','dept_id']).mean().reset_index()
+    df_price=df_price.drop(columns=['item_id'])
+    df_snap=df_snap.groupby(['state_id','store_id','cat_id','dept_id']).max().reset_index()
+    df_snap=df_snap.drop(columns=['item_id'])
+    
     
     #start of the algorithm for a given weight
-    tree=Tree( data_directory=Y_path, type='spatial')
-    tree.forecast_Prophet(iOoS=iOoS, mX=mX[:,:-iOoS], holidays=holidays  )
+    tree=Tree(dfData=df_data, sType='spatial')
+    
+    tree.forecast(iOoS=iOoS , sModel='sarimax',
+                      dfHolidays=df_holidays,
+                      dfSNAP=df_snap,
+                      dfPrice=df_price, sTempRecMethod=None)
+    tree.forecast(iOoS=iOoS , sModel='ucm',
+                                dfHolidays=df_holidays,
+                                dfSNAP=df_snap,
+                                dfPrice=df_price,
+                                sTempRecMethod='wls_hvar')
+
+    # tree.forecast_prophet(iOoS=iOoS, dfHolidays=df_holidays ,sTransform=None )
     tree.reconcile( sWeightType = weight_type)    
         
       

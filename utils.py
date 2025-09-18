@@ -224,10 +224,17 @@ def matrix_to_df(matrix: np.ndarray, row_names:list, column_names_1:list, column
         
     return df
 
-def return_loss(mTrue, mPred , mW:np.ndarray, metric:str , slices:list ):
+def return_loss(mTrue, mPred , mW:np.ndarray, metric:str , slices:list , median=False ):
     """
     mY for scaled losses
     mW for any weighted losses
+    
+    
+    RMSE: Root Mean Squared Error
+    MSE: Mean Squared Error
+    MAPE: Mean Absolute Percentage Error
+    TSE: Total Squared Error (Squared L2 norm)
+    
     
     """ 
     vSlices=np.zeros(len(slices))
@@ -243,15 +250,27 @@ def return_loss(mTrue, mPred , mW:np.ndarray, metric:str , slices:list ):
         
         
         if metric=='MSE':
-            loss=np.median(np.sum((mP-mT)**2,axis=0))
+            if median==True:
+                loss=np.median(np.sum((mP-mT)**2,axis=0))
+            else:
+                loss=np.mean(np.sum((mP-mT)**2,axis=0))
         elif metric=='RMSE':
-            loss=np.sqrt(np.median(np.sum((mP-mT)**2,axis=0)))
+            if median==True:
+                loss=np.sqrt(np.median(np.sum((mP-mT)**2,axis=0)))
+            else:
+                loss=np.sqrt(np.mean(np.sum((mP-mT)**2,axis=0)))
         elif metric=='TSE':
-            loss=np.sum((mP-mT)**2,axis=0)
+            loss=np.sum(np.sum((mP-mT)**2,axis=0))
         elif metric=='MAPE':
-            loss=np.median(np.sum(np.abs(mP-mT)/(mT+1),axis=0))
+            if median==True:
+                loss=np.median(np.sum(np.abs(mP-mT)/(mT+1),axis=0))
+            else:
+                loss=np.mean(np.sum(np.abs(mP-mT)/(mT+1),axis=0))
         elif metric=='MPE':
-            loss=np.median(np.sum((mP-mT)/(mT+1),axis=0))
+            if median==True:
+                loss=np.median(np.sum((mP-mT)/(mT+1),axis=0))
+            else:     
+                loss=np.mean(np.sum((mP-mT)/(mT+1),axis=0))
         elif metric=='MWvarSE':
             vWeights=np.diag(mW)
             vW=vWeights[start:end]
@@ -263,15 +282,27 @@ def return_loss(mTrue, mPred , mW:np.ndarray, metric:str , slices:list ):
     
     #the average
     if metric=='MSE':
-        loss=np.median(np.sum((mPred-mTrue)**2,axis=0))
+        if median==True:
+            loss=np.median(np.sum((mPred-mTrue)**2,axis=0))
+        else:
+            loss=np.mean(np.sum((mPred-mTrue)**2,axis=0))
     elif metric=='RMSE':
-        loss=np.sqrt(np.median(np.sum((mPred-mTrue)**2,axis=0)))
+        if median==True:
+            loss=np.sqrt(np.median(np.sum((mPred-mTrue)**2,axis=0)))
+        else:
+            loss=np.sqrt(np.mean(np.sum((mPred-mTrue)**2,axis=0)))
     elif metric=='MAPE':
-        loss=np.median(np.sum(np.abs(mPred-mTrue)/(mTrue+1),axis=0))
+        if median==True:
+            loss=np.median(np.sum(np.abs(mPred-mTrue)/(mTrue+1),axis=0))
+        else:
+            loss=np.mean(np.sum(np.abs(mPred-mTrue)/(mTrue+1),axis=0))
     elif metric=='MPE':
-        loss=np.median(np.sum((mPred-mTrue)/(mTrue+1),axis=0))
+        if median==True:
+            loss=np.median(np.sum((mPred-mTrue)/(mTrue+1),axis=0))
+        else:
+            loss=np.mean(np.sum((mPred-mTrue)/(mTrue+1),axis=0))
     elif metric=='TSE':
-        loss=np.sum((mPred-mTrue)**2,axis=0)
+        loss=np.sum(np.sum((mPred-mTrue)**2,axis=0))
     # elif metric=='RMSSE':
     #     loss=np.sqrt(np.mean((mTrue-mPred)**2 , axis=1)  / np.mean( (mY[:,1:] - mY[:,:-1])**2 , axis=1))    
     # elif metric=='WRMSSE':
@@ -336,10 +367,31 @@ def sort_key(item):
     none_count = item.count(None)
     return (-none_count, item)  
 
+def split_dict(dData: dict, dLevels: dict):
+    """
+    Splits a dictionary of dictionaries into smaller dictionaries based on dLevels values.
+
+    Args:
+        dData (dict): The input dictionary to split. Keys can be any order-preserving iterable.
+        dLevels (dict): Dictionary with keys representing levels and values as the number of items to include.
+
+    Returns:
+        list: A list of sub-dictionaries split based on dLevels values.
+    """
+    splits = []
+    items = list(dData.items())
+    start = 0
+    for size in dLevels.values():
+        sub_items = items[start:start + size]
+        splits.append(dict(sub_items))
+        start += size
+    return splits
+
+
 def split_matrix(matrix, dLevels: dict):
     """
     Splits a matrix into smaller matrices based on row sizes derived from dLevels values.
-
+    #TODO give an example
     Args:
         matrix (np.ndarray): The input matrix to split.
         dLevels (dict): Dictionary with keys representing levels and values as the row sizes.
@@ -429,14 +481,14 @@ def create_cascading_matrix(list_of_lengths):
     
     return matrix   
 
-def getCVResults( h:int, iOoS:int, ddOutputs ,metric:str , slices: list , iters: int , rolling=True , relative=True):
+def getCVResults( h:int, iOoS:int, ddOutputs ,metric:str , slices: list , iters: int , rolling=True , relative=True , predicted='tilde'):
     """ 
     
     Returns a dataframe of average relative metric , where average is computed over slices of the error vector
     as well as whole metric  (the bottom most row). 
     When rolling is True, then average is computed for all iterations and for all horizon windows
     When rolling is False, then average is computer only for the horizon h but still for every iteration
-    When iters is None, average is computed for every iteration
+    When iters is None, average is computed for all iterations
     When iter is an integer then iters number of CV folds will be included in the average
     
     
@@ -449,6 +501,7 @@ def getCVResults( h:int, iOoS:int, ddOutputs ,metric:str , slices: list , iters:
     rolling (bool) : if True, calculates metris on a rolling basis h=1, h= 1-4 , h= 1-14 ...
     iters (int)  Number of iterations of CV to consider when getting the results
     relative (bool) : If True , relative to reference and base will be returned if False, absolute metric values will be presented
+    predicted (string): use Reconciled (tilde) or unreconciled(hat), if hat is used then relative has to be false
     """
 
     try:
@@ -459,7 +512,7 @@ def getCVResults( h:int, iOoS:int, ddOutputs ,metric:str , slices: list , iters:
      
     #TODO   rows  must be dynamically populated based on data 
     lMethods=list(ddOutputs.keys())
-    if 'wls_hvar' in ddOutputs.keys() : #then it is temporal
+    if slices==[7,1] : #then it is temporal
         rows=['W','D',"Average"]  #TODO
         reference='top_down_hp'
         lMethods.remove(reference)
@@ -489,7 +542,7 @@ def getCVResults( h:int, iOoS:int, ddOutputs ,metric:str , slices: list , iters:
     
         
     #SELECT METRIC
-    vLossHat=return_loss(mYtrue,mYhat, mW=mW, metric=metric, slices=slices)
+    vLossHat=return_loss(mYtrue,mYhat, mW=mW, metric=metric, slices=slices )
     vLossTilde_bu=return_loss(mYtrue,mYtilde, mW=mW, metric=metric, slices=slices)     
     
     if relative==True:
@@ -499,6 +552,9 @@ def getCVResults( h:int, iOoS:int, ddOutputs ,metric:str , slices: list , iters:
     elif relative==False:
         mResults=np.zeros((len(slices)+1,len(lMethods)+1))  
         mResults[:,0]=vLossTilde_bu
+        if predicted=='hat':
+            mResults[:,0]=vLossHat
+            
 
     #DO THE SAME FOR THE REST OF THE METHODS
     for j,sWeightType in enumerate(lMethods):
@@ -518,6 +574,8 @@ def getCVResults( h:int, iOoS:int, ddOutputs ,metric:str , slices: list , iters:
             mResults[:,1+2*(j+1)]=(1-vLossTilde/vLossTilde_bu)*100
         elif relative==False:
             mResults[:,j+1]=vLossTilde
+            if predicted=='hat':
+                mResults[:,j+1]=vLossHat
 
     if relative==True:
         dfResults = matrix_to_df(np.round(mResults,2),
